@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nyx Meet — Room</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="room-page">
+
+  <header class="room-header">
+    <div class="header-left">
+      <span class="logo-small">☽ NyxMeet</span>
+      <span class="room-badge" id="roomLabel">Room: ...</span>
+    </div>
+    <div class="header-right">
+      <span class="timer" id="callTimer">00:00:00</span>
+    </div>
+  </header>
+
+  <div class="video-grid" id="videoGrid"></div>
+
+  <div class="controls-bar">
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="micBtn" onclick="toggleMic()" title="Toggle Mic">
+        <span id="micIcon">🎙️</span>
+        <span class="ctrl-label">Mute</span>
+      </button>
+      <button class="ctrl-btn ctrl-arrow" onclick="openDevicePanel('audio')" title="Choose Mic">▲</button>
+    </div>
+
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="camBtn" onclick="toggleCam()" title="Toggle Camera">
+        <span id="camIcon">📷</span>
+        <span class="ctrl-label">Camera</span>
+      </button>
+      <button class="ctrl-btn ctrl-arrow" onclick="openDevicePanel('video')" title="Choose Camera">▲</button>
+    </div>
+
+    <button class="ctrl-btn" id="screenBtn" onclick="toggleScreen()" title="Share Screen">
+      <span>🖥️</span>
+      <span class="ctrl-label">Share</span>
+    </button>
+    <button class="ctrl-btn danger" onclick="leaveRoom()" title="Leave">
+      <span>📵</span>
+      <span class="ctrl-label">Leave</span>
+    </button>
+  </div>
+
+  <!-- Device Selector Panel -->
+  <div class="device-panel" id="devicePanel">
+    <div class="device-panel-header">
+      <span id="devicePanelTitle">Select Device</span>
+      <button onclick="closeDevicePanel()">✕</button>
+    </div>
+    <div class="device-list" id="deviceList"></div>
+  </div>
+  <div class="device-overlay" id="deviceOverlay" onclick="closeDevicePanel()"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const ROOM_ID = params.get("room") || "default";
+    const MY_ID = Math.random().toString(36).substring(2, 10);
+
+    document.getElementById("roomLabel").textContent = `Room: ${ROOM_ID}`;
+    document.title = `Nyx Meet — ${ROOM_ID}`;
+
+    const socket = io();
+    const peers = {};
+    const peerStreams = {};
+
+    let localStream = null;
+    let screenStream = null;
+    let micOn = true;
+    let camOn = true;
+    let sharing = false;
+
+    let selectedAudioId = null;
+    let selectedVideoId = null;
+    let currentPanelKind = null;
+
+    // ── Timer ──────────────────────────────────────────────
+    let seconds = 0;
+    setInterval(() => {
+      seconds++;
+      const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+      const s = String(seconds % 60).padStart(2, "0");
+      document.getElementById("callTimer").textContent = `${h}:${m}:${s}`;
+    }, 1000);
+
+    // ── Get local media ────────────────────────────────────
+    async function startLocalStream(audioId = null, videoId = null) {
+      try {
+        if (localStream) localStream.getTracks().forEach(t => t.stop());
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: videoId ? { deviceId: { exact: videoId } } : true,
+          audio: audioId ? { deviceId: { exact: audioId } } : true,
+        });
+
+        const existing = document.getElementById(`tile-${MY_ID}`);
+        if (existing) {
+          existing.querySelector("video").srcObject = localStream;
+        } else {
+          addVideoStream(MY_ID, localStream, true);
+          socket.emit("join-room", ROOM_ID, MY_ID);
+        }
+
+        // Replace tracks in all active peers
+        Object.values(peers).forEach((peer) => {
+          localStream.getTracks().forEach((track) => {
+            const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === track.kind);
+            if (sender) sender.replaceTrack(track);
+          });
+        });
+
+        if (!micOn) localStream.getAudioTracks().forEach(t => t.enabled = false);
+        if (!camOn) localStream.getVideoTracks().forEach(t => t.enabled = false);
+
+      } catch (err) {
+        alert("Camera/Mic access denied. Please allow permissions and refresh.");
+        console.error(err);
+      }
+    }
+
+    // ── Video tile ─────────────────────────────────────────
+    function addVideoStream(id, stream, isLocal = false) {
+      if (document.getElementById(`tile-${id}`)) return;
+      const tile = document.createElement("div");
+      tile.className = "video-tile";
+      tile.id = `tile-${id}`;
+
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.autoplay = true;
+      video.playsInline = true;
+      if (isLocal) video.muted = true;
+
+      const label = document.createElement("div");
+      label.className = "video-label";
+      label.textContent = isLocal ? "You" : "Guest";
+
+      tile.appendChild(video);
+      tile.appendChild(label);
+      document.getElementById("videoGrid").appendChild(tile);
+    }
+
+    function removeVideoStream(id) {
+      const tile = document.getElementById(`tile-${id}`);
+      if (tile) tile.remove();
+    }
+
+    // ── WebRTC ─────────────────────────────────────────────
+    function createPeer(userId, initiator) {
+      const peer = new SimplePeer({ initiator, trickle: false, stream: localStream });
+
+      peer.on("signal", (signal) => socket.emit("signal", { to: userId, from: MY_ID, signal }));
+      peer.on("stream", (stream) => { peerStreams[userId] = stream; addVideoStream(userId, stream); });
+      peer.on("close", () => { removeVideoStream(userId); delete peers[userId]; delete peerStreams[userId]; });
+      peer.on("error", (err) => console.error("Peer error:", err));
+
+      peers[userId] = peer;
+      return peer;
+    }
+
+    socket.on("user-connected", (userId) => createPeer(userId, true));
+    socket.on("signal", ({ from, signal }) => { if (!peers[from]) createPeer(from, false); peers[from].signal(signal); });
+    socket.on("user-disconnected", (userId) => { if (peers[userId]) { peers[userId].destroy(); delete peers[userId]; } removeVideoStream(userId); });
+
+    // ── Controls ───────────────────────────────────────────
+    function toggleMic() {
+      micOn = !micOn;
+      localStream.getAudioTracks().forEach(t => t.enabled = micOn);
+      document.getElementById("micIcon").textContent = micOn ? "🎙️" : "🔇";
+      document.getElementById("micBtn").classList.toggle("off", !micOn);
+      document.querySelector("#micBtn .ctrl-label").textContent = micOn ? "Mute" : "Unmute";
+    }
+
+    function toggleCam() {
+      camOn = !camOn;
+      localStream.getVideoTracks().forEach(t => t.enabled = camOn);
+      document.getElementById("camIcon").textContent = camOn ? "📷" : "🚫";
+      document.getElementById("camBtn").classList.toggle("off", !camOn);
+      document.querySelector("#camBtn .ctrl-label").textContent = camOn ? "Camera" : "Cam Off";
+    }
+
+    async function toggleScreen() {
+      if (!sharing) {
+        try {
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          const screenTrack = screenStream.getVideoTracks()[0];
+          Object.values(peers).forEach((peer) => {
+            const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
+            if (sender) sender.replaceTrack(screenTrack);
+          });
+          const localVideo = document.querySelector(`#tile-${MY_ID} video`);
+          if (localVideo) localVideo.srcObject = screenStream;
+          sharing = true;
+          document.getElementById("screenBtn").classList.add("active-share");
+          document.querySelector("#screenBtn .ctrl-label").textContent = "Stop Share";
+          screenTrack.onended = () => stopScreen();
+        } catch (err) { console.error("Screen share error:", err); }
+      } else { stopScreen(); }
+    }
+
+    function stopScreen() {
+      if (!screenStream) return;
+      screenStream.getTracks().forEach(t => t.stop());
+      const camTrack = localStream.getVideoTracks()[0];
+      Object.values(peers).forEach((peer) => {
+        const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
+        if (sender) sender.replaceTrack(camTrack);
+      });
+      const localVideo = document.querySelector(`#tile-${MY_ID} video`);
+      if (localVideo) localVideo.srcObject = localStream;
+      sharing = false;
+      document.getElementById("screenBtn").classList.remove("active-share");
+      document.querySelector("#screenBtn .ctrl-label").textContent = "Share";
+      screenStream = null;
+    }
+
+    function leaveRoom() {
+      if (confirm("Leave the room?")) {
+        localStream?.getTracks().forEach(t => t.stop());
+        screenStream?.getTracks().forEach(t => t.stop());
+        window.location.href = "/";
+      }
+    }
+
+    // ── Device Selector ────────────────────────────────────
+    async function openDevicePanel(kind) {
+      currentPanelKind = kind;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const filtered = devices.filter(d => d.kind === (kind === "audio" ? "audioinput" : "videoinput"));
+
+      document.getElementById("devicePanelTitle").textContent = kind === "audio" ? "🎙️ Choose Microphone" : "📷 Choose Camera";
+
+      const list = document.getElementById("deviceList");
+      list.innerHTML = "";
+
+      filtered.forEach(device => {
+        const btn = document.createElement("button");
+        btn.className = "device-item";
+        const isSelected = kind === "audio"
+          ? device.deviceId === selectedAudioId
+          : device.deviceId === selectedVideoId;
+        if (isSelected) btn.classList.add("selected");
+        btn.textContent = device.label || `Device ${device.deviceId.slice(0, 8)}`;
+        btn.onclick = () => selectDevice(kind, device.deviceId);
+        list.appendChild(btn);
+      });
+
+      document.getElementById("devicePanel").classList.add("open");
+      document.getElementById("deviceOverlay").classList.add("open");
+    }
+
+    function closeDevicePanel() {
+      document.getElementById("devicePanel").classList.remove("open");
+      document.getElementById("deviceOverlay").classList.remove("open");
+    }
+
+    async function selectDevice(kind, deviceId) {
+      if (kind === "audio") selectedAudioId = deviceId;
+      else selectedVideoId = deviceId;
+      closeDevicePanel();
+      await startLocalStream(selectedAudioId, selectedVideoId);
+    }
+
+    // ── Start ──────────────────────────────────────────────
+    startLocalStream();
+  </script>
+</body>
+</html>

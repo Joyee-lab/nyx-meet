@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nyx Meet</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="home-page">
+  <div class="home-container">
+    <div class="logo-area">
+      <div class="logo-icon">☽</div>
+      <h1 class="logo-text">Nyx<span>Meet</span></h1>
+      <p class="tagline">No limits. No timers. Just connect.</p>
+    </div>
+
+    <div class="join-card">
+      <h2>Start or Join a Room</h2>
+      <div class="input-group">
+        <input type="text" id="roomInput" placeholder="Enter room code..." maxlength="20" />
+        <button id="joinBtn" onclick="joinRoom()">Enter →</button>
+      </div>
+      <p class="hint">Share the room code with anyone you want to invite.</p>
+      <button class="random-btn" onclick="generateRoom()">⚡ Generate Random Room</button>
+    </div>
+  </div>
+
+  <script>
+    function joinRoom() {
+      const room = document.getElementById("roomInput").value.trim();
+      if (!room) return alert("Enter a room code first!");
+      window.location.href = `/room.html?room=${encodeURIComponent(room)}`;
+    }
+
+    function generateRoom() {
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      document.getElementById("roomInput").value = code;
+    }
+
+    document.getElementById("roomInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") joinRoom();
+    });
+  </script>
+</body>
+</html>
