@@ -9,35 +9,41 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, "public")));
 
-// Track users in each room
-const rooms = {};
+const rooms = {}; // roomId -> { userId: name }
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // User joins a room
-  socket.on("join-room", (roomId, userId) => {
+  socket.on("join-room", ({ roomId, userId, name }) => {
     socket.join(roomId);
+    if (!rooms[roomId]) rooms[roomId] = {};
+    rooms[roomId][userId] = name;
 
-    if (!rooms[roomId]) rooms[roomId] = [];
-    rooms[roomId].push(userId);
+    // Tell existing users about the new user
+    socket.to(roomId).emit("user-connected", { userId, name });
 
-    // Tell existing users that a new user joined
-    socket.to(roomId).emit("user-connected", userId);
+    console.log(`${name} (${userId}) joined room ${roomId}`);
 
-    console.log(`User ${userId} joined room ${roomId}`);
-
-    // Handle disconnect
     socket.on("disconnect", () => {
-      rooms[roomId] = (rooms[roomId] || []).filter((id) => id !== userId);
-      socket.to(roomId).emit("user-disconnected", userId);
-      console.log(`User ${userId} left room ${roomId}`);
+      if (rooms[roomId]) delete rooms[roomId][userId];
+      socket.to(roomId).emit("user-disconnected", { userId, name });
+      console.log(`${name} left room ${roomId}`);
     });
   });
 
-  // Relay WebRTC signaling messages
+  // Relay WebRTC signals
   socket.on("signal", ({ to, from, signal }) => {
-    io.to(to).emit("signal", { from, signal });
+    // Find the name of the sender
+    let senderName = "Guest";
+    for (const room of Object.values(rooms)) {
+      if (room[from]) { senderName = room[from]; break; }
+    }
+    io.to(to).emit("signal", { from, signal, name: senderName });
+  });
+
+  // Chat
+  socket.on("chat", ({ roomId, name, msg }) => {
+    socket.to(roomId).emit("chat-message", { name, msg });
   });
 });
 
