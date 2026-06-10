@@ -99,6 +99,10 @@
       </button>
       <button class="ctrl-btn ctrl-arrow" onclick="openDevicePanel('video')">▲</button>
     </div>
+    <button class="ctrl-btn" id="mirrorBtn" onclick="toggleMirror()" title="Mirror my video">
+      <span>🔁</span>
+      <span class="ctrl-label">Mirror</span>
+    </button>
     <button class="ctrl-btn" id="screenBtn" onclick="toggleScreen()">
       <span>🖥️</span>
       <span class="ctrl-label">Share</span>
@@ -533,21 +537,82 @@
   // ── DEVICE SELECTOR ──────────────────────────
   async function openDevicePanel(kind) {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const filtered = devices.filter(d => d.kind === (kind === "audio" ? "audioinput" : "videoinput"));
-    document.getElementById("devicePanelTitle").textContent = kind === "audio" ? "🎙️ Choose Microphone" : "📷 Choose Camera";
+    document.getElementById("devicePanelTitle").textContent = kind === "audio" ? "🔊 Audio Settings" : "📷 Camera Settings";
     const list = document.getElementById("deviceList");
     list.innerHTML = "";
-    filtered.forEach(device => {
-      const btn = document.createElement("button");
-      btn.className = "device-item";
-      const isSelected = kind === "audio" ? device.deviceId === selectedAudioId : device.deviceId === selectedVideoId;
-      if (isSelected) btn.classList.add("selected");
-      btn.textContent = device.label || `Device ${device.deviceId.slice(0,8)}`;
-      btn.onclick = () => selectDevice(kind, device.deviceId);
-      list.appendChild(btn);
-    });
+
+    if (kind === "audio") {
+      // Input section
+      const inputLabel = document.createElement("div");
+      inputLabel.className = "device-section-label";
+      inputLabel.textContent = "🎙️ Microphone (Input)";
+      list.appendChild(inputLabel);
+
+      const inputs = devices.filter(d => d.kind === "audioinput");
+      inputs.forEach(device => {
+        const btn = document.createElement("button");
+        btn.className = "device-item";
+        if (device.deviceId === selectedAudioId) btn.classList.add("selected");
+        btn.textContent = device.label || `Microphone ${device.deviceId.slice(0,8)}`;
+        btn.onclick = () => selectDevice("audio", device.deviceId);
+        list.appendChild(btn);
+      });
+
+      // Output section
+      const outputLabel = document.createElement("div");
+      outputLabel.className = "device-section-label";
+      outputLabel.style.marginTop = "0.75rem";
+      outputLabel.textContent = "🔊 Speaker (Output)";
+      list.appendChild(outputLabel);
+
+      const outputs = devices.filter(d => d.kind === "audiooutput");
+      if (outputs.length === 0) {
+        const none = document.createElement("div");
+        none.className = "device-item-empty";
+        none.textContent = "Default system output";
+        list.appendChild(none);
+      } else {
+        outputs.forEach(device => {
+          const btn = document.createElement("button");
+          btn.className = "device-item";
+          if (device.deviceId === selectedAudioOutputId) btn.classList.add("selected");
+          btn.textContent = device.label || `Speaker ${device.deviceId.slice(0,8)}`;
+          btn.onclick = () => selectAudioOutput(device.deviceId);
+          list.appendChild(btn);
+        });
+      }
+
+    } else {
+      const inputLabel = document.createElement("div");
+      inputLabel.className = "device-section-label";
+      inputLabel.textContent = "📷 Camera (Input)";
+      list.appendChild(inputLabel);
+
+      const cameras = devices.filter(d => d.kind === "videoinput");
+      cameras.forEach(device => {
+        const btn = document.createElement("button");
+        btn.className = "device-item";
+        if (device.deviceId === selectedVideoId) btn.classList.add("selected");
+        btn.textContent = device.label || `Camera ${device.deviceId.slice(0,8)}`;
+        btn.onclick = () => selectDevice("video", device.deviceId);
+        list.appendChild(btn);
+      });
+    }
+
     document.getElementById("devicePanel").classList.add("open");
     document.getElementById("deviceOverlay").classList.add("open");
+  }
+
+  let selectedAudioOutputId = null;
+  async function selectAudioOutput(deviceId) {
+    selectedAudioOutputId = deviceId;
+    closeDevicePanel();
+    // Apply to all remote video elements
+    document.querySelectorAll(".video-tile video:not([muted])").forEach(async video => {
+      if (video.setSinkId) {
+        try { await video.setSinkId(deviceId); } catch(e) { console.warn("setSinkId failed:", e); }
+      }
+    });
   }
 
   function closeDevicePanel() {
@@ -579,6 +644,20 @@
         if (sender) sender.replaceTrack(track);
       });
     });
+  }
+
+  // ── MIRROR ───────────────────────────────────
+  let mirrored = true;
+  function toggleMirror() {
+    mirrored = !mirrored;
+    const localVideo = document.querySelector(`#tile-${MY_ID} video`);
+    const camPanelVideo = document.querySelector(`#cam-${MY_ID} video`);
+    const previewVideo = document.getElementById("previewVideo");
+    const style = mirrored ? "scaleX(-1)" : "scaleX(1)";
+    if (localVideo) localVideo.style.transform = style;
+    if (camPanelVideo) camPanelVideo.style.transform = style;
+    if (previewVideo) previewVideo.style.transform = style;
+    document.getElementById("mirrorBtn").classList.toggle("active-share", mirrored);
   }
 
   // ── CAM PANEL ────────────────────────────────
@@ -613,6 +692,13 @@
     if (!micOn) localStream.getAudioTracks().forEach(t => t.enabled = false);
     if (!camOn) localStream.getVideoTracks().forEach(t => t.enabled = false);
     addVideoStream(MY_ID, localStream, MY_NAME, true);
+    // Mirror local video by default
+    setTimeout(() => {
+      const lv = document.querySelector(`#tile-${MY_ID} video`);
+      if (lv) lv.style.transform = "scaleX(-1)";
+      const cv = document.querySelector(`#cam-${MY_ID} video`);
+      if (cv) cv.style.transform = "scaleX(-1)";
+    }, 100);
     updateParticipantsList();
     startTimer();
     socket.emit("join-room", { roomId: ROOM_ID, userId: MY_ID, name: MY_NAME });
