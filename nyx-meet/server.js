@@ -13,6 +13,7 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, "public")));
 
 const rooms = {}; // roomId -> { socketId: { userId, name } }
+const roomHosts = {}; // roomId -> hostUserId
 
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
@@ -25,31 +26,60 @@ io.on("connection", (socket) => {
 
     if (!rooms[roomId]) rooms[roomId] = {};
 
-    // Send the new user a list of everyone already in the room
+    // First person in room = host
+    const isHost = Object.keys(rooms[roomId]).length === 0;
+    if (isHost) roomHosts[roomId] = userId;
+    socket.isHost = isHost;
+
+    // Send new user the existing users list + who is host
     const existingUsers = Object.values(rooms[roomId]);
     socket.emit("existing-users", existingUsers);
+    socket.emit("host-assigned", { hostId: roomHosts[roomId], isYou: isHost });
 
     // Tell everyone else this person joined
     socket.to(roomId).emit("user-connected", { userId, name });
 
-    // Now add this user to the room
+    // Add to room
     rooms[roomId][socket.id] = { userId, name };
-
-    console.log(`${name} joined room ${roomId}. Total: ${Object.keys(rooms[roomId]).length}`);
+    console.log(`${name} (${isHost ? "HOST" : "guest"}) joined room ${roomId}`);
   });
 
   // Relay WebRTC signals
   socket.on("signal", ({ to, from, signal, name }) => {
-    // find socket with matching userId
     const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === to);
+    if (targetSocket) targetSocket.emit("signal", { from, signal, name: socket.userName });
+  });
+
+  // Chat relay (public)
+  socket.on("chat", ({ roomId, name, msg }) => {
+    socket.to(roomId).emit("chat-message", { name, msg });
+  });
+
+  // DM relay
+  socket.on("dm", ({ toUserId, fromName, msg }) => {
+    const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === toUserId);
     if (targetSocket) {
-      targetSocket.emit("signal", { from, signal, name: socket.userName });
+      targetSocket.emit("dm-received", { fromId: socket.userId, fromName, msg });
     }
   });
 
-  // Chat relay
-  socket.on("chat", ({ roomId, name, msg }) => {
-    socket.to(roomId).emit("chat-message", { name, msg });
+  // Host mutes a participant
+  socket.on("host-mute", ({ roomId, targetUserId }) => {
+    if (roomHosts[roomId] !== socket.userId) return; // only host
+    const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === targetUserId);
+    if (targetSocket) targetSocket.emit("force-mute");
+    socket.to(roomId).emit("participant-muted", { userId: targetUserId });
+  });
+
+  // Host kicks a participant
+  socket.on("host-kick", ({ roomId, targetUserId }) => {
+    if (roomHosts[roomId] !== socket.userId) return; // only host
+    const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === targetUserId);
+    if (targetSocket) {
+      targetSocket.emit("you-were-kicked");
+      targetSocket.leave(roomId);
+    }
+    io.to(roomId).emit("participant-kicked", { userId: targetUserId, name: targetSocket?.userName || "Someone" });
   });
 
   socket.on("disconnect", () => {
@@ -57,6 +87,20 @@ io.on("connection", (socket) => {
     if (roomId && rooms[roomId]) {
       delete rooms[roomId][socket.id];
       socket.to(roomId).emit("user-disconnected", { userId, name: userName });
+      // If host left, assign new host
+      if (roomHosts[roomId] === userId) {
+        const remaining = Object.values(rooms[roomId]);
+        if (remaining.length > 0) {
+          const newHost = remaining[0];
+          roomHosts[roomId] = newHost.userId;
+          io.to(roomId).emit("host-assigned", { hostId: newHost.userId, isYou: false });
+          const newHostSocket = [...io.sockets.sockets.values()].find(s => s.userId === newHost.userId);
+          if (newHostSocket) newHostSocket.emit("host-assigned", { hostId: newHost.userId, isYou: true });
+        } else {
+          delete roomHosts[roomId];
+          delete rooms[roomId];
+        }
+      }
       console.log(`${userName} left room ${roomId}`);
     }
   });
