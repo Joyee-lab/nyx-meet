@@ -5,45 +5,60 @@ const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: { origin: "*" },
+  transports: ["websocket", "polling"]
+});
 
 app.use(express.static(path.join(__dirname, "public")));
 
-const rooms = {}; // roomId -> { userId: name }
+const rooms = {}; // roomId -> { socketId: { userId, name } }
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("Socket connected:", socket.id);
 
   socket.on("join-room", ({ roomId, userId, name }) => {
     socket.join(roomId);
-    if (!rooms[roomId]) rooms[roomId] = {};
-    rooms[roomId][userId] = name;
+    socket.roomId = roomId;
+    socket.userId = userId;
+    socket.userName = name;
 
-    // Tell existing users about the new user
+    if (!rooms[roomId]) rooms[roomId] = {};
+
+    // Send the new user a list of everyone already in the room
+    const existingUsers = Object.values(rooms[roomId]);
+    socket.emit("existing-users", existingUsers);
+
+    // Tell everyone else this person joined
     socket.to(roomId).emit("user-connected", { userId, name });
 
-    console.log(`${name} (${userId}) joined room ${roomId}`);
+    // Now add this user to the room
+    rooms[roomId][socket.id] = { userId, name };
 
-    socket.on("disconnect", () => {
-      if (rooms[roomId]) delete rooms[roomId][userId];
-      socket.to(roomId).emit("user-disconnected", { userId, name });
-      console.log(`${name} left room ${roomId}`);
-    });
+    console.log(`${name} joined room ${roomId}. Total: ${Object.keys(rooms[roomId]).length}`);
   });
 
   // Relay WebRTC signals
-  socket.on("signal", ({ to, from, signal }) => {
-    // Find the name of the sender
-    let senderName = "Guest";
-    for (const room of Object.values(rooms)) {
-      if (room[from]) { senderName = room[from]; break; }
+  socket.on("signal", ({ to, from, signal, name }) => {
+    // find socket with matching userId
+    const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === to);
+    if (targetSocket) {
+      targetSocket.emit("signal", { from, signal, name: socket.userName });
     }
-    io.to(to).emit("signal", { from, signal, name: senderName });
   });
 
-  // Chat
+  // Chat relay
   socket.on("chat", ({ roomId, name, msg }) => {
     socket.to(roomId).emit("chat-message", { name, msg });
+  });
+
+  socket.on("disconnect", () => {
+    const { roomId, userId, userName } = socket;
+    if (roomId && rooms[roomId]) {
+      delete rooms[roomId][socket.id];
+      socket.to(roomId).emit("user-disconnected", { userId, name: userName });
+      console.log(`${userName} left room ${roomId}`);
+    }
   });
 });
 

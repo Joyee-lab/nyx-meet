@@ -359,7 +359,7 @@
   function createPeer(userId, initiator, userName) {
     const peer = new SimplePeer({ initiator, trickle: true, stream: localStream, config: ICE_CONFIG });
 
-    peer.on("signal", signal => socket.emit("signal", { to: userId, from: MY_ID, signal }));
+    peer.on("signal", signal => socket.emit("signal", { to: userId, from: MY_ID, signal, name: MY_NAME }));
 
     peer.on("stream", stream => {
       peerNames[userId] = userName || "Guest";
@@ -400,16 +400,34 @@
   }
 
   // ── SOCKET ───────────────────────────────────
+  // Get list of users already in room -> we initiate to each of them
+  socket.on("existing-users", (users) => {
+    console.log("Existing users:", users);
+    users.forEach(({ userId, name }) => {
+      if (userId !== MY_ID) {
+        peerNames[userId] = name;
+        createPeer(userId, true, name); // we are the initiator
+      }
+    });
+    updateParticipantsList();
+  });
+
+  // New user joined -> they will initiate to us, we just wait for signal
   socket.on("user-connected", ({ userId, name }) => {
+    console.log("User connected:", userId, name);
     peerNames[userId] = name;
-    createPeer(userId, true, name);
     showNotif(`${name} joined the room 🎉`, "join");
     updateParticipantsList();
   });
 
   socket.on("signal", ({ from, signal, name }) => {
-    if (!peers[from]) createPeer(from, false, name);
-    peers[from].signal(signal);
+    console.log("Signal from:", from, signal.type || "candidate");
+    if (!peers[from]) {
+      // we're the receiver
+      peerNames[from] = name || peerNames[from] || "Guest";
+      createPeer(from, false, peerNames[from]);
+    }
+    try { peers[from].signal(signal); } catch(e) { console.error("Signal error:", e); }
   });
 
   socket.on("user-disconnected", ({ userId, name }) => {
