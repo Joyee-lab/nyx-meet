@@ -41,6 +41,7 @@
       <button class="header-btn" id="participantsToggle" onclick="toggleParticipantsPanel()">👥 <span id="participantCount">1</span></button>
       <button class="header-btn" onclick="toggleCamPanel()">🎥</button>
       <button class="header-btn" onclick="toggleChat()">💬</button>
+      <button class="header-btn" id="dmHeaderBtn" onclick="toggleDmList()" style="display:none">✉️ <span id="dmBadge" style="display:none">●</span></button>
     </div>
   </header>
 
@@ -107,12 +108,90 @@
       <span>🖥️</span>
       <span class="ctrl-label">Share</span>
     </button>
+    <button class="ctrl-btn" onclick="toggleLayoutPanel()" id="layoutBtn">
+      <span>⊞</span>
+      <span class="ctrl-label">Layout</span>
+    </button>
     <button class="ctrl-btn danger" onclick="leaveRoom()">
       <span>📵</span>
       <span class="ctrl-label">Leave</span>
     </button>
   </div>
 
+</div>
+
+<!-- Layout Panel -->
+<div class="layout-panel" id="layoutPanel" style="display:none">
+  <div class="layout-panel-header">
+    <span>⊞ Video Layout</span>
+    <button onclick="toggleLayoutPanel()">✕</button>
+  </div>
+  <div class="layout-grid">
+    <button class="layout-option active" id="layout-gallery" onclick="setLayout('gallery')">
+      <div class="layout-preview gallery-preview">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <span class="layout-name">Gallery</span>
+    </button>
+    <button class="layout-option" id="layout-speaker" onclick="setLayout('speaker')">
+      <div class="layout-preview speaker-preview">
+        <span class="big"></span>
+        <div class="smalls"><span></span><span></span></div>
+      </div>
+      <span class="layout-name">Speaker</span>
+    </button>
+    <button class="layout-option" id="layout-fullscreen" onclick="setLayout('fullscreen')">
+      <div class="layout-preview fullscreen-preview">
+        <span></span>
+      </div>
+      <span class="layout-name">Fullscreen</span>
+    </button>
+    <button class="layout-option" id="layout-multispeaker" onclick="setLayout('multispeaker')">
+      <div class="layout-preview multispeaker-preview">
+        <span class="big"></span>
+        <span></span><span></span><span></span>
+      </div>
+      <span class="layout-name">Multi-Speaker</span>
+    </button>
+    <button class="layout-option" id="layout-immersive" onclick="setLayout('immersive')">
+      <div class="layout-preview immersive-preview">
+        <span class="main"></span>
+        <span class="overlay"></span>
+      </div>
+      <span class="layout-name">Immersive</span>
+    </button>
+    <button class="layout-option" id="layout-floating" onclick="setLayout('floating')">
+      <div class="layout-preview floating-preview">
+        <span class="bg"></span>
+        <span class="pip"></span>
+      </div>
+      <span class="layout-name">Floating</span>
+    </button>
+  </div>
+</div>
+<div class="layout-overlay" id="layoutOverlay" onclick="toggleLayoutPanel()"></div>
+
+<!-- Floating thumbnail (PiP) -->
+<div class="floating-pip" id="floatingPip" style="display:none">
+  <div class="pip-drag-handle" id="pipHandle">⠿</div>
+  <video id="pipVideo" autoplay muted playsinline></video>
+  <div class="pip-label">You</div>
+</div>
+
+<!-- DM Panel -->
+<div class="side-panel dm-panel" id="dmPanel" style="display:none">
+  <div class="panel-header">
+    <div class="dm-header-left">
+      <button class="dm-back-btn" onclick="closeDm()">← Back</button>
+      <span id="dmPanelTitle">DM</span>
+    </div>
+    <button onclick="closeDm()">✕</button>
+  </div>
+  <div class="chat-messages" id="dmMessages"></div>
+  <div class="chat-input-row">
+    <input type="text" id="dmInput" placeholder="Send a DM..." maxlength="300" />
+    <button onclick="sendDm()">➤</button>
+  </div>
 </div>
 
 <!-- Device Panel -->
@@ -141,7 +220,11 @@
   const peerNames = {};
   const peerMuted = {};
 
+  let isHost = false;
+  let hostId = null;
   let localStream = null;
+  let dmConversations = {}; // userId -> [{ from, msg, time }]
+  let activeDmUserId = null;
   let previewStream = null;
   let screenStream = null;
   let micOn = true;
@@ -157,7 +240,20 @@
     try {
       previewStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+          sampleSize: 16,
+          channelCount: 2,
+          latency: 0,
+          googEchoCancellation: true,
+          googAutoGainControl: true,
+          googNoiseSuppression: true,
+          googHighpassFilter: true,
+          googTypingNoiseDetection: true
+        }
       });
       const v = document.getElementById("previewVideo");
       v.srcObject = previewStream;
@@ -273,28 +369,51 @@
     selfDiv.innerHTML = `
       <div class="p-avatar">${MY_NAME[0].toUpperCase()}</div>
       <div class="p-info">
-        <span class="p-name">${MY_NAME} (You)</span>
+        <span class="p-name">${MY_NAME} (You) ${isHost ? '<span class="host-badge">👑 Host</span>' : ''}</span>
         <span class="p-status">${micOn ? "🎙️" : "🔇"} ${camOn ? "📷" : "🚫"}</span>
       </div>`;
     list.appendChild(selfDiv);
 
     // Others
     Object.entries(peerNames).forEach(([id, name]) => {
+      const isThisHost = id === hostId;
       const div = document.createElement("div");
       div.className = "participant-item";
       div.innerHTML = `
         <div class="p-avatar">${name[0].toUpperCase()}</div>
         <div class="p-info">
-          <span class="p-name">${name}</span>
+          <span class="p-name">${name} ${isThisHost ? '<span class="host-badge">👑 Host</span>' : ''}</span>
           <span class="p-status">${peerMuted[id] ? "🔇" : "🎙️"}</span>
         </div>
-        <button class="p-mute-btn" onclick="muteParticipant('${id}')" title="Mute/Unmute">
-          ${peerMuted[id] ? "🔊" : "🔇"}
-        </button>`;
+        <div class="p-actions">
+          <button class="p-mute-btn" onclick="muteParticipant('${id}')" title="${peerMuted[id] ? 'Unmute locally' : 'Mute locally'}">
+            ${peerMuted[id] ? "🔊" : "🔇"}
+          </button>
+          ${isHost ? `
+          <button class="p-host-mute-btn" onclick="hostMute('${id}')" title="Force mute">🎙️✕</button>
+          <button class="p-kick-btn" onclick="kickParticipant('${id}', '${name}')" title="Kick">🚫</button>
+          ` : ''}
+        </div>`;
       list.appendChild(div);
     });
 
     document.getElementById("participantCount").textContent = Object.keys(peerNames).length + 1;
+
+    // Show DM button if there are other participants
+    const dmBtn = document.getElementById("dmHeaderBtn");
+    if (Object.keys(peerNames).length > 0) dmBtn.style.display = "";
+    else dmBtn.style.display = "none";
+  }
+
+  function hostMute(targetId) {
+    socket.emit("host-mute", { roomId: ROOM_ID, targetUserId: targetId });
+    showNotif("Participant muted", "info");
+  }
+
+  function kickParticipant(targetId, name) {
+    if (confirm(`Remove ${name} from the room?`)) {
+      socket.emit("host-kick", { roomId: ROOM_ID, targetUserId: targetId });
+    }
   }
 
   function muteParticipant(peerId) {
@@ -345,6 +464,24 @@
   }
 
   // ── WEBRTC ───────────────────────────────────
+  // Force high quality audio codec
+  function setAudioCodec(pc) {
+    try {
+      const transceivers = pc.getTransceivers();
+      transceivers.forEach(transceiver => {
+        if (transceiver.sender && transceiver.sender.track && transceiver.sender.track.kind === "audio") {
+          const capabilities = RTCRtpSender.getCapabilities("audio");
+          if (capabilities) {
+            // Prefer opus with high bitrate
+            const opus = capabilities.codecs.filter(c => c.mimeType === "audio/opus");
+            const others = capabilities.codecs.filter(c => c.mimeType !== "audio/opus");
+            transceiver.setCodecPreferences([...opus, ...others]);
+          }
+        }
+      });
+    } catch(e) { console.warn("Codec preference not supported:", e); }
+  }
+
   const ICE_CONFIG = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -365,6 +502,28 @@
 
     peer.on("signal", signal => socket.emit("signal", { to: userId, from: MY_ID, signal, name: MY_NAME }));
 
+    peer.on("connect", () => {
+      // Set high audio bitrate via SDP
+      try {
+        const pc = peer._pc;
+        setAudioCodec(pc);
+        pc.getSenders().forEach(sender => {
+          if (sender.track && sender.track.kind === "audio") {
+            const params = sender.getParameters();
+            if (!params.encodings) params.encodings = [{}];
+            params.encodings[0].maxBitrate = 128000; // 128kbps audio
+            sender.setParameters(params).catch(e => console.warn("setParameters:", e));
+          }
+          if (sender.track && sender.track.kind === "video") {
+            const params = sender.getParameters();
+            if (!params.encodings) params.encodings = [{}];
+            params.encodings[0].maxBitrate = 2500000; // 2.5mbps video
+            sender.setParameters(params).catch(e => console.warn("setParameters:", e));
+          }
+        });
+      } catch(e) { console.warn("Bitrate setting failed:", e); }
+    });
+
     peer.on("stream", stream => {
       peerNames[userId] = userName || "Guest";
       // update video if tile already exists
@@ -377,6 +536,7 @@
         addVideoStream(userId, stream, peerNames[userId]);
       }
       updateParticipantsList();
+      setTimeout(applyLayout, 200);
     });
 
     peer.on("track", (track, stream) => {
@@ -446,6 +606,59 @@
   socket.on("chat-message", ({ name, msg }) => {
     addChatMsg(name, msg);
     showNotif(`${name}: ${msg.substring(0, 40)}`, "chat");
+  });
+
+  // Host assignment
+  socket.on("host-assigned", ({ hostId: hId, isYou }) => {
+    hostId = hId;
+    isHost = isYou;
+    if (isYou) showNotif("👑 You are the host", "join");
+    updateParticipantsList();
+  });
+
+  // Force muted by host
+  socket.on("force-mute", () => {
+    if (micOn) toggleMic();
+    showNotif("🔇 You were muted by the host", "leave");
+  });
+
+  // Participant was muted (update UI for everyone)
+  socket.on("participant-muted", ({ userId }) => {
+    updateParticipantsList();
+  });
+
+  // Someone was kicked
+  socket.on("participant-kicked", ({ userId: kickedId, name }) => {
+    if (peers[kickedId]) { peers[kickedId].destroy(); delete peers[kickedId]; }
+    removeVideoStream(kickedId);
+    delete peerNames[kickedId];
+    delete peerMuted[kickedId];
+    showNotif(`${name} was removed from the room`, "leave");
+    updateParticipantsList();
+  });
+
+  // You were kicked
+  socket.on("you-were-kicked", () => {
+    alert("You have been removed from the room by the host.");
+    window.location.href = "/";
+  });
+
+  // DM received
+  socket.on("dm-received", ({ fromId, fromName, msg }) => {
+    if (!dmConversations[fromId]) dmConversations[fromId] = [];
+    dmConversations[fromId].push({ from: fromName, msg, self: false, time: new Date() });
+
+    // Show notification
+    showNotif(`✉️ DM from ${fromName}: ${msg.substring(0, 30)}`, "chat");
+
+    // If DM panel is open for this person, update it
+    if (activeDmUserId === fromId) {
+      renderDmMessages(fromId);
+    } else {
+      // Show badge
+      document.getElementById("dmBadge").style.display = "inline";
+      document.getElementById("dmHeaderBtn").style.display = "";
+    }
   });
 
   // ── CONTROLS ─────────────────────────────────
@@ -628,9 +841,21 @@
       video: selectedVideoId
         ? { deviceId: { exact: selectedVideoId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }
         : { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-      audio: selectedAudioId
-        ? { deviceId: { exact: selectedAudioId }, echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
-        : { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
+      audio: {
+        ...(selectedAudioId ? { deviceId: { exact: selectedAudioId } } : {}),
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+        sampleSize: 16,
+        channelCount: 2,
+        latency: 0,
+        googEchoCancellation: true,
+        googAutoGainControl: true,
+        googNoiseSuppression: true,
+        googHighpassFilter: true,
+        googTypingNoiseDetection: true
+      },
     });
     const oldStream = localStream;
     localStream = newStream;
@@ -659,6 +884,217 @@
     if (previewVideo) previewVideo.style.transform = style;
     document.getElementById("mirrorBtn").classList.toggle("active-share", mirrored);
   }
+
+  // ── LAYOUTS ──────────────────────────────────
+  let currentLayout = "gallery";
+  let speakerFocusId = null;
+
+  function toggleLayoutPanel() {
+    const panel = document.getElementById("layoutPanel");
+    const overlay = document.getElementById("layoutOverlay");
+    const open = panel.style.display === "none" || !panel.style.display;
+    panel.style.display = open ? "block" : "none";
+    overlay.style.display = open ? "block" : "none";
+  }
+
+  function setLayout(layout) {
+    currentLayout = layout;
+    // Update active button
+    document.querySelectorAll(".layout-option").forEach(b => b.classList.remove("active"));
+    document.getElementById(`layout-${layout}`).classList.add("active");
+    toggleLayoutPanel();
+    applyLayout();
+  }
+
+  function applyLayout() {
+    const grid = document.getElementById("videoGrid");
+    const tiles = [...grid.querySelectorAll(".video-tile")];
+    const pip = document.getElementById("floatingPip");
+    const pipVideo = document.getElementById("pipVideo");
+    const localTile = document.getElementById(`tile-${MY_ID}`);
+
+    // Reset all
+    grid.className = "video-grid";
+    grid.style.cssText = "";
+    tiles.forEach(t => { t.style.cssText = ""; t.classList.remove("focused","hidden","immersive-main","immersive-overlay"); });
+    pip.style.display = "none";
+    if (localTile) localTile.style.display = "";
+
+    if (currentLayout === "gallery") {
+      grid.classList.add("layout-gallery");
+
+    } else if (currentLayout === "speaker") {
+      grid.classList.add("layout-speaker");
+      // Biggest = first non-self, or self if alone
+      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      tiles.forEach(t => {
+        if (t === focused) t.classList.add("focused");
+      });
+
+    } else if (currentLayout === "fullscreen") {
+      grid.classList.add("layout-fullscreen");
+      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      tiles.forEach(t => {
+        if (t !== focused) t.style.display = "none";
+        else t.classList.add("focused");
+      });
+
+    } else if (currentLayout === "multispeaker") {
+      grid.classList.add("layout-multispeaker");
+      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      focused.classList.add("focused");
+
+    } else if (currentLayout === "immersive") {
+      grid.classList.add("layout-immersive");
+      const main = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      const overlay = tiles.find(t => t !== main);
+      main.classList.add("immersive-main");
+      if (overlay) overlay.classList.add("immersive-overlay");
+      tiles.forEach(t => {
+        if (t !== main && t !== overlay) t.style.display = "none";
+      });
+
+    } else if (currentLayout === "floating") {
+      grid.classList.add("layout-floating");
+      // Hide local tile, show as floating PiP
+      if (localTile) localTile.style.display = "none";
+      const localVideo = localTile ? localTile.querySelector("video") : null;
+      if (localVideo) {
+        pipVideo.srcObject = localVideo.srcObject;
+        pip.style.display = "flex";
+      }
+      // Make remote tiles fill
+      tiles.forEach(t => {
+        if (t.id !== `tile-${MY_ID}`) t.classList.add("focused");
+      });
+    }
+  }
+
+  // Draggable PiP
+  (function() {
+    let dragging = false, ox = 0, oy = 0;
+    const handle = document.getElementById("pipHandle");
+    const pip = document.getElementById("floatingPip");
+    if (!handle || !pip) return;
+    handle.addEventListener("mousedown", e => {
+      dragging = true;
+      ox = e.clientX - pip.offsetLeft;
+      oy = e.clientY - pip.offsetTop;
+      e.preventDefault();
+    });
+    handle.addEventListener("touchstart", e => {
+      dragging = true;
+      ox = e.touches[0].clientX - pip.offsetLeft;
+      oy = e.touches[0].clientY - pip.offsetTop;
+    }, { passive: true });
+    document.addEventListener("mousemove", e => {
+      if (!dragging) return;
+      pip.style.left = (e.clientX - ox) + "px";
+      pip.style.top = (e.clientY - oy) + "px";
+      pip.style.right = "auto"; pip.style.bottom = "auto";
+    });
+    document.addEventListener("touchmove", e => {
+      if (!dragging) return;
+      pip.style.left = (e.touches[0].clientX - ox) + "px";
+      pip.style.top = (e.touches[0].clientY - oy) + "px";
+      pip.style.right = "auto"; pip.style.bottom = "auto";
+    }, { passive: true });
+    document.addEventListener("mouseup", () => dragging = false);
+    document.addEventListener("touchend", () => dragging = false);
+  })();
+
+  // ── DM SYSTEM ────────────────────────────────
+  function toggleDmList() {
+    // Show list of people to DM
+    const panel = document.getElementById("dmPanel");
+    const isOpen = panel.style.display !== "none";
+    if (isOpen && activeDmUserId === null) { panel.style.display = "none"; return; }
+    activeDmUserId = null;
+    panel.style.display = "flex";
+    document.getElementById("dmPanelTitle").textContent = "Direct Messages";
+    document.getElementById("dmBadge").style.display = "none";
+
+    // Show list of participants to DM
+    const msgs = document.getElementById("dmMessages");
+    msgs.innerHTML = "";
+    if (Object.keys(peerNames).length === 0) {
+      msgs.innerHTML = '<div style="color:var(--muted);padding:1rem;font-size:0.85rem;">No one else in the room yet.</div>';
+      return;
+    }
+    Object.entries(peerNames).forEach(([id, name]) => {
+      const unread = dmConversations[id]?.filter(m => !m.self && !m.read).length || 0;
+      const item = document.createElement("div");
+      item.className = "dm-person-item";
+      item.innerHTML = `
+        <div class="p-avatar">${name[0].toUpperCase()}</div>
+        <div class="p-info">
+          <span class="p-name">${name}</span>
+          <span class="p-status" style="font-size:0.75rem;color:var(--muted)">
+            ${dmConversations[id]?.length ? dmConversations[id][dmConversations[id].length-1].msg.substring(0,25)+'...' : 'No messages yet'}
+          </span>
+        </div>
+        ${unread ? `<span class="dm-unread-badge">${unread}</span>` : ''}
+      `;
+      item.onclick = () => openDm(id, name);
+      msgs.appendChild(item);
+    });
+    document.getElementById("dmInput").style.display = "none";
+    document.querySelector(".chat-input-row button").style.display = "none";
+  }
+
+  function openDm(userId, name) {
+    activeDmUserId = userId;
+    document.getElementById("dmPanelTitle").textContent = `✉️ ${name}`;
+    document.getElementById("dmInput").style.display = "";
+    document.getElementById("dmInput").placeholder = `Message ${name}...`;
+    document.querySelector(".chat-input-row button").style.display = "";
+
+    // Mark as read
+    if (dmConversations[userId]) {
+      dmConversations[userId].forEach(m => m.read = true);
+    }
+    renderDmMessages(userId);
+  }
+
+  function renderDmMessages(userId) {
+    const msgs = document.getElementById("dmMessages");
+    msgs.innerHTML = "";
+    const convo = dmConversations[userId] || [];
+    if (convo.length === 0) {
+      msgs.innerHTML = '<div style="color:var(--muted);padding:1rem;font-size:0.82rem;text-align:center;">No messages yet. Say hi! 👋</div>';
+      return;
+    }
+    convo.forEach(({ from, msg, self }) => {
+      const div = document.createElement("div");
+      div.className = `chat-msg ${self ? "self" : "other"}`;
+      div.innerHTML = `<span class="chat-name">${self ? "You" : from}</span><span class="chat-text">${msg}</span>`;
+      msgs.appendChild(div);
+    });
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function sendDm() {
+    if (!activeDmUserId) return;
+    const input = document.getElementById("dmInput");
+    const msg = input.value.trim();
+    if (!msg) return;
+    socket.emit("dm", { toUserId: activeDmUserId, fromName: MY_NAME, msg });
+    if (!dmConversations[activeDmUserId]) dmConversations[activeDmUserId] = [];
+    dmConversations[activeDmUserId].push({ from: MY_NAME, msg, self: true, time: new Date() });
+    renderDmMessages(activeDmUserId);
+    input.value = "";
+  }
+
+  function closeDm() {
+    if (activeDmUserId !== null) {
+      // Go back to DM list
+      toggleDmList();
+    } else {
+      document.getElementById("dmPanel").style.display = "none";
+    }
+  }
+
+  document.getElementById("dmInput").addEventListener("keydown", e => { if (e.key === "Enter") sendDm(); });
 
   // ── CAM PANEL ────────────────────────────────
   function toggleCamPanel() {
@@ -689,8 +1125,20 @@
 
   // ── START ROOM ───────────────────────────────
   function startRoom() {
-    if (!micOn) localStream.getAudioTracks().forEach(t => t.enabled = false);
-    if (!camOn) localStream.getVideoTracks().forEach(t => t.enabled = false);
+    // Sync button states with actual track states from prejoin
+    micOn = localStream.getAudioTracks().some(t => t.enabled);
+    camOn = localStream.getVideoTracks().some(t => t.enabled);
+
+    // Sync mic button UI
+    document.getElementById("micIcon").textContent = micOn ? "🎙️" : "🔇";
+    document.getElementById("micBtn").classList.toggle("off", !micOn);
+    document.querySelector("#micBtn .ctrl-label").textContent = micOn ? "Mute" : "Unmute";
+
+    // Sync cam button UI
+    document.getElementById("camIcon").textContent = camOn ? "📷" : "🚫";
+    document.getElementById("camBtn").classList.toggle("off", !camOn);
+    document.querySelector("#camBtn .ctrl-label").textContent = camOn ? "Camera" : "Cam Off";
+
     addVideoStream(MY_ID, localStream, MY_NAME, true);
     // Mirror local video by default
     setTimeout(() => {
