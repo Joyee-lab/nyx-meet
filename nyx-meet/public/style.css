@@ -365,7 +365,7 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
   font-size: 1rem;
 }
 
-.device-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.device-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 320px; overflow-y: auto; padding-right: 0.25rem; }
 
 .device-item {
   background: var(--surface2);
