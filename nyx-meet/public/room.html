@@ -39,6 +39,7 @@
     <div class="header-right">
       <span class="timer" id="callTimer">00:00:00</span>
       <button class="header-btn" id="participantsToggle" onclick="toggleParticipantsPanel()">👥 <span id="participantCount">1</span></button>
+      <button class="header-btn" onclick="toggleCamPanel()">🎥</button>
       <button class="header-btn" onclick="toggleChat()">💬</button>
     </div>
   </header>
@@ -54,6 +55,15 @@
         <button onclick="toggleParticipantsPanel()">✕</button>
       </div>
       <div class="participants-list" id="participantsList"></div>
+    </div>
+
+    <!-- Camera Panel (Zoom-style) -->
+    <div class="cam-panel" id="camPanel" style="display:none">
+      <div class="cam-panel-header">
+        <span>🎥 Cameras</span>
+        <button onclick="toggleCamPanel()">✕</button>
+      </div>
+      <div class="cam-panel-grid" id="camPanelGrid"></div>
     </div>
 
     <!-- Chat Panel -->
@@ -303,11 +313,20 @@
     video.srcObject = stream;
     video.autoplay = true;
     video.playsInline = true;
-    if (isLocal) video.muted = true;
+    video.muted = isLocal; // only mute self, never mute remote
+    video.volume = 1.0;
+
+    // iOS/Safari fix - need user interaction to play audio
+    video.addEventListener("loadedmetadata", () => {
+      video.play().catch(e => console.warn("Autoplay blocked:", e));
+    });
 
     const label = document.createElement("div");
     label.className = "video-label";
     label.textContent = isLocal ? `${name} (You)` : name;
+
+    // Camera panel thumbnail
+    addCamPanelTile(id, stream, name, isLocal);
 
     tile.appendChild(video);
     tile.appendChild(label);
@@ -317,6 +336,8 @@
   function removeVideoStream(id) {
     const tile = document.getElementById(`tile-${id}`);
     if (tile) tile.remove();
+    const camTile = document.getElementById(`cam-${id}`);
+    if (camTile) camTile.remove();
   }
 
   // ── WEBRTC ───────────────────────────────────
@@ -402,17 +423,36 @@
   async function toggleScreen() {
     if (!sharing) {
       try {
-        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        const screenTrack = screenStream.getVideoTracks()[0];
-        Object.values(peers).forEach(peer => {
-          const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
-          if (sender) sender.replaceTrack(screenTrack);
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { cursor: "always" },
+          audio: true // request system audio
         });
-        document.querySelector(`#tile-${MY_ID} video`).srcObject = screenStream;
+        const screenVideoTrack = screenStream.getVideoTracks()[0];
+        const screenAudioTrack = screenStream.getAudioTracks()[0];
+
+        Object.values(peers).forEach(peer => {
+          const senders = peer._pc.getSenders();
+          // Replace video track
+          const videoSender = senders.find(s => s.track && s.track.kind === "video");
+          if (videoSender) videoSender.replaceTrack(screenVideoTrack);
+          // Add/replace audio track with screen audio if available
+          if (screenAudioTrack) {
+            const audioSender = senders.find(s => s.track && s.track.kind === "audio");
+            if (audioSender) audioSender.replaceTrack(screenAudioTrack);
+          }
+        });
+
+        // Show screen in local tile
+        const combinedStream = new MediaStream([
+          screenVideoTrack,
+          ...(screenAudioTrack ? [screenAudioTrack] : localStream.getAudioTracks())
+        ]);
+        document.querySelector(`#tile-${MY_ID} video`).srcObject = combinedStream;
+
         sharing = true;
         document.getElementById("screenBtn").classList.add("active-share");
         document.querySelector("#screenBtn .ctrl-label").textContent = "Stop";
-        screenTrack.onended = stopScreen;
+        screenVideoTrack.onended = stopScreen;
       } catch(e) { console.error(e); }
     } else { stopScreen(); }
   }
@@ -420,11 +460,18 @@
   function stopScreen() {
     if (!screenStream) return;
     screenStream.getTracks().forEach(t => t.stop());
+
     const camTrack = localStream.getVideoTracks()[0];
+    const micTrack = localStream.getAudioTracks()[0];
+
     Object.values(peers).forEach(peer => {
-      const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
-      if (sender) sender.replaceTrack(camTrack);
+      const senders = peer._pc.getSenders();
+      const videoSender = senders.find(s => s.track && s.track.kind === "video");
+      if (videoSender && camTrack) videoSender.replaceTrack(camTrack);
+      const audioSender = senders.find(s => s.track && s.track.kind === "audio");
+      if (audioSender && micTrack) audioSender.replaceTrack(micTrack);
     });
+
     document.querySelector(`#tile-${MY_ID} video`).srcObject = localStream;
     sharing = false;
     document.getElementById("screenBtn").classList.remove("active-share");
@@ -489,6 +536,33 @@
         if (sender) sender.replaceTrack(track);
       });
     });
+  }
+
+  // ── CAM PANEL ────────────────────────────────
+  function toggleCamPanel() {
+    const panel = document.getElementById("camPanel");
+    panel.style.display = (panel.style.display === "none" || !panel.style.display) ? "flex" : "none";
+  }
+
+  function addCamPanelTile(id, stream, name, isLocal = false) {
+    if (document.getElementById(`cam-${id}`)) return;
+    const tile = document.createElement("div");
+    tile.className = "cam-tile";
+    tile.id = `cam-${id}`;
+
+    const video = document.createElement("video");
+    video.srcObject = stream;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true; // always muted in cam panel to avoid echo
+
+    const label = document.createElement("div");
+    label.className = "cam-label";
+    label.textContent = isLocal ? `${name} (You)` : name;
+
+    tile.appendChild(video);
+    tile.appendChild(label);
+    document.getElementById("camPanelGrid").appendChild(tile);
   }
 
   // ── START ROOM ───────────────────────────────
