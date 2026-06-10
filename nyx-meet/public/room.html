@@ -141,7 +141,10 @@
   // ── PREJOIN ─────────────────────────────────
   async function startPreview() {
     try {
-      previewStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      previewStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+      });
       const v = document.getElementById("previewVideo");
       v.srcObject = previewStream;
       document.getElementById("previewOff").style.display = "none";
@@ -467,8 +470,12 @@
     else selectedVideoId = deviceId;
     closeDevicePanel();
     const newStream = await navigator.mediaDevices.getUserMedia({
-      video: selectedVideoId ? { deviceId: { exact: selectedVideoId } } : true,
-      audio: selectedAudioId ? { deviceId: { exact: selectedAudioId } } : true,
+      video: selectedVideoId
+        ? { deviceId: { exact: selectedVideoId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }
+        : { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+      audio: selectedAudioId
+        ? { deviceId: { exact: selectedAudioId }, echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+        : { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
     });
     const oldStream = localStream;
     localStream = newStream;
