@@ -55,6 +55,14 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("chat-message", { name, msg });
   });
 
+  socket.on("screen-share-started", ({ roomId, userId, name }) => {
+    socket.to(roomId).emit("screen-share-started", { userId, name });
+  });
+
+  socket.on("screen-share-stopped", ({ roomId, userId }) => {
+    socket.to(roomId).emit("screen-share-stopped", { userId });
+  });
+
   // DM relay
   socket.on("dm", ({ toUserId, fromName, msg }) => {
     const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === toUserId);

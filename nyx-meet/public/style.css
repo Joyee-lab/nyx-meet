@@ -1041,3 +1041,14 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
   font-family: 'Syne', sans-serif;
   font-weight: 600;
 }
+
+/* ── Screen share tile ─────────────────────── */
+.screen-tile {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.screen-label {
+  background: rgba(124,58,237,0.7) !important;
+  backdrop-filter: blur(6px);
+}

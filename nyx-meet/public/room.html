@@ -268,7 +268,8 @@
   let isHost = false;
   let hostId = null;
   let localStream = null;
-  let dmConversations = {}; // userId -> [{ from, msg, time }]
+  let dmConversations = {};
+  let peerScreenSharing = {}; // userId -> [{ from, msg, time }]
   let activeDmUserId = null;
   let previewStream = null;
   let screenStream = null;
@@ -585,10 +586,15 @@
     });
 
     peer.on("track", (track, stream) => {
-      // Fallback: update video when individual track arrives
-      const tile = document.getElementById(`tile-${userId}`);
-      if (tile && stream) {
-        tile.querySelector("video").srcObject = stream;
+      if (track.kind === "video") {
+        const existingTile = document.getElementById(`tile-${userId}`);
+        if (peerScreenSharing[userId] && !document.getElementById(`tile-screen-${userId}`)) {
+          // This is the screen share track — add separate screen tile
+          addScreenTile(`screen-${userId}`, stream, `${peerNames[userId] || "Guest"}'s Screen`);
+        } else if (existingTile) {
+          // Regular cam update
+          existingTile.querySelector("video").srcObject = stream;
+        }
       }
     });
 
@@ -686,6 +692,20 @@
   socket.on("you-were-kicked", () => {
     alert("You have been removed from the room by the host.");
     window.location.href = "/";
+  });
+
+  // Remote screen share started — add a screen tile for them
+  socket.on("screen-share-started", ({ userId, name }) => {
+    // The actual stream comes through the peer "track" event
+    // We just flag it so when the track arrives we know it's a screen
+    peerScreenSharing[userId] = true;
+    showNotif(`🖥️ ${name} started screen sharing`, "join");
+  });
+
+  socket.on("screen-share-stopped", ({ userId }) => {
+    peerScreenSharing[userId] = false;
+    removeScreenTile(`screen-${userId}`);
+    showNotif(`🖥️ Screen share ended`, "leave");
   });
 
   // DM received
@@ -788,64 +808,58 @@
         const screenAudioTrack = screenStream.getAudioTracks()[0];
         const micTrack = localStream.getAudioTracks()[0];
 
-        // Mix mic + screen audio together using Web Audio API
-        // This way mic stays active and screen audio is added on top
+        // Mix mic + screen audio
         let audioTrackToSend = micTrack;
         if (screenAudioTrack) {
           try {
             audioContext = new AudioContext();
             const dest = audioContext.createMediaStreamDestination();
-
-            // Add mic
             if (micTrack) {
-              const micStream = new MediaStream([micTrack]);
-              const micSource = audioContext.createMediaStreamSource(micStream);
+              const micSource = audioContext.createMediaStreamSource(new MediaStream([micTrack]));
               micSource.connect(dest);
             }
-
-            // Add screen audio
-            const screenAudioStream = new MediaStream([screenAudioTrack]);
-            const screenSource = audioContext.createMediaStreamSource(screenAudioStream);
+            const screenSource = audioContext.createMediaStreamSource(new MediaStream([screenAudioTrack]));
             screenSource.connect(dest);
-
             mixedAudioStream = dest.stream;
             mixedAudioTrack = mixedAudioStream.getAudioTracks()[0];
             audioTrackToSend = mixedAudioTrack;
           } catch(e) {
             console.warn("Audio mixing failed, using mic only:", e);
-            audioTrackToSend = micTrack;
           }
         }
 
-        // Replace ONLY video track for all peers, keep audio as mixed
+        // Add a NEW separate peer track for screen video
+        // We send screen as a second video track via a new transceiver
         Object.values(peers).forEach(peer => {
-          const senders = peer._pc.getSenders();
-          const videoSender = senders.find(s => s.track && s.track.kind === "video");
-          if (videoSender) videoSender.replaceTrack(screenVideoTrack);
+          try {
+            // Add screen video as extra transceiver
+            peer._pc.addTrack(screenVideoTrack, screenStream);
+          } catch(e) {
+            console.warn("addTrack failed, falling back to replaceTrack:", e);
+            const senders = peer._pc.getSenders();
+            const videoSender = senders.find(s => s.track && s.track.kind === "video");
+            if (videoSender) videoSender.replaceTrack(screenVideoTrack);
+          }
+          // Mix audio
           if (audioTrackToSend) {
+            const senders = peer._pc.getSenders();
             const audioSender = senders.find(s => s.track && s.track.kind === "audio");
             if (audioSender) audioSender.replaceTrack(audioTrackToSend);
           }
         });
 
-        // Show screen in local tile (video only, keep cam audio)
-        const previewStream = new MediaStream([screenVideoTrack]);
-        document.querySelector(`#tile-${MY_ID} video`).srcObject = previewStream;
+        // Add local screen tile (separate from cam tile)
+        addScreenTile(`screen-${MY_ID}`, screenStream, `${MY_NAME}'s Screen`);
+
+        // Notify others via socket that we started screen share
+        socket.emit("screen-share-started", { roomId: ROOM_ID, userId: MY_ID, name: MY_NAME });
 
         sharing = true;
         document.getElementById("screenBtn").classList.add("active-share");
         document.querySelector("#screenBtn .ctrl-label").textContent = "Stop";
 
-        // When screen share ends (user clicks stop in browser bar)
         screenVideoTrack.onended = stopScreen;
-
-        // Also watch if screen audio track ends separately
-        if (screenAudioTrack) {
-          screenAudioTrack.onended = () => {
-            // Screen audio ended but keep sharing video
-            console.log("Screen audio ended, continuing with mic only");
-          };
-        }
+        if (screenAudioTrack) screenAudioTrack.onended = () => console.log("Screen audio ended, mic continues");
 
       } catch(e) {
         if (e.name !== "NotAllowedError") console.error("Screen share error:", e);
@@ -853,34 +867,57 @@
     } else { stopScreen(); }
   }
 
+  function addScreenTile(id, stream, label) {
+    if (document.getElementById(`tile-${id}`)) return;
+    const tile = document.createElement("div");
+    tile.className = "video-tile screen-tile";
+    tile.id = `tile-${id}`;
+
+    const video = document.createElement("video");
+    video.srcObject = stream;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+
+    const lbl = document.createElement("div");
+    lbl.className = "video-label screen-label";
+    lbl.innerHTML = `🖥️ ${label}`;
+
+    tile.appendChild(video);
+    tile.appendChild(lbl);
+    document.getElementById("videoGrid").prepend(tile); // put screen at front
+    setTimeout(applyLayout, 100);
+  }
+
+  function removeScreenTile(id) {
+    const tile = document.getElementById(`tile-${id}`);
+    if (tile) { tile.remove(); setTimeout(applyLayout, 100); }
+  }
+
   function stopScreen() {
     if (!screenStream) return;
-
-    // Stop screen tracks
     screenStream.getTracks().forEach(t => t.stop());
 
-    // Clean up audio context
-    if (audioContext) {
-      audioContext.close().catch(() => {});
-      audioContext = null;
-    }
+    if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
     mixedAudioTrack = null;
     mixedAudioStream = null;
 
-    // Restore original cam + mic tracks
+    // Restore cam + mic
     const camTrack = localStream.getVideoTracks()[0];
     const micTrack = localStream.getAudioTracks()[0];
 
     Object.values(peers).forEach(peer => {
       const senders = peer._pc.getSenders();
-      const videoSender = senders.find(s => s.track && s.track.kind === "video");
-      if (videoSender && camTrack) videoSender.replaceTrack(camTrack);
+      // Remove the screen track sender
+      const screenSender = senders.find(s => s.track === screenStream?.getVideoTracks()[0]);
+      if (screenSender) { try { peer._pc.removeTrack(screenSender); } catch(e) {} }
+      // Restore audio
       const audioSender = senders.find(s => s.track && s.track.kind === "audio");
       if (audioSender && micTrack) audioSender.replaceTrack(micTrack);
     });
 
-    // Restore local video preview
-    document.querySelector(`#tile-${MY_ID} video`).srcObject = localStream;
+    removeScreenTile(`screen-${MY_ID}`);
+    socket.emit("screen-share-stopped", { roomId: ROOM_ID, userId: MY_ID });
 
     sharing = false;
     document.getElementById("screenBtn").classList.remove("active-share");
