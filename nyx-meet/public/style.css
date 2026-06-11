@@ -1017,3 +1017,27 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
 @media (max-width: 768px) {
   .dm-panel { width: 100% !important; position: fixed; bottom: 0; top: auto; height: 70vh; border-radius: 20px 20px 0 0; }
 }
+
+/* ── Screen share settings ─────────────────── */
+.sq-badge {
+  background: rgba(167,139,250,0.15);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  margin-left: 0.4rem;
+  font-family: 'Syne', sans-serif;
+}
+
+.screen-settings-summary {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--accent);
+  text-align: center;
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+}

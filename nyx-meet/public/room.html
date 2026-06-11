@@ -104,10 +104,13 @@
       <span>🔁</span>
       <span class="ctrl-label">Mirror</span>
     </button>
-    <button class="ctrl-btn" id="screenBtn" onclick="toggleScreen()">
-      <span>🖥️</span>
-      <span class="ctrl-label">Share</span>
-    </button>
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="screenBtn" onclick="toggleScreen()">
+        <span>🖥️</span>
+        <span class="ctrl-label">Share</span>
+      </button>
+      <button class="ctrl-btn ctrl-arrow" onclick="openScreenSettings()" title="Screen share settings">▲</button>
+    </div>
     <button class="ctrl-btn" onclick="toggleLayoutPanel()" id="layoutBtn">
       <span>⊞</span>
       <span class="ctrl-label">Layout</span>
@@ -193,6 +196,48 @@
     <button onclick="sendDm()">➤</button>
   </div>
 </div>
+
+<!-- Screen Share Settings Panel -->
+<div class="device-panel" id="screenSettingsPanel">
+  <div class="device-panel-header">
+    <span id="screenSettingsTitle">🖥️ Screen Share Settings</span>
+    <button onclick="closeScreenSettings()">✕</button>
+  </div>
+  <div class="device-list">
+    <div class="device-section-label">Resolution / Quality</div>
+    <button class="device-item" id="sq-1080" onclick="setScreenQuality('1080')">
+      🎬 1080p — Full HD <span class="sq-badge">Best Quality</span>
+    </button>
+    <button class="device-item" id="sq-720" onclick="setScreenQuality('720')">
+      📺 720p — HD
+    </button>
+    <button class="device-item selected" id="sq-480" onclick="setScreenQuality('480')">
+      📱 480p — Standard <span class="sq-badge">Recommended</span>
+    </button>
+    <button class="device-item" id="sq-360" onclick="setScreenQuality('360')">
+      💾 360p — Low Bandwidth
+    </button>
+
+    <div class="device-section-label" style="margin-top:0.75rem">Frame Rate (FPS)</div>
+    <button class="device-item" id="sf-60" onclick="setScreenFps(60)">
+      ⚡ 60 FPS — Smooth (Gaming)
+    </button>
+    <button class="device-item selected" id="sf-30" onclick="setScreenFps(30)">
+      🎯 30 FPS — Balanced <span class="sq-badge">Recommended</span>
+    </button>
+    <button class="device-item" id="sf-15" onclick="setScreenFps(15)">
+      📡 15 FPS — Low Bandwidth
+    </button>
+    <button class="device-item" id="sf-5" onclick="setScreenFps(5)">
+      🐢 5 FPS — Slideshow / Minimal
+    </button>
+
+    <div class="screen-settings-summary" id="screenSettingsSummary">
+      Current: 480p @ 30 FPS
+    </div>
+  </div>
+</div>
+<div class="device-overlay" id="screenSettingsOverlay" onclick="closeScreenSettings()"></div>
 
 <!-- Device Panel -->
 <div class="device-panel" id="devicePanel">
@@ -680,6 +725,46 @@
     updateParticipantsList();
   }
 
+  // Screen share quality settings
+  let screenQuality = "480";
+  let screenFps = 30;
+  const QUALITY_MAP = {
+    "1080": { width: 1920, height: 1080 },
+    "720":  { width: 1280, height: 720  },
+    "480":  { width: 854,  height: 480  },
+    "360":  { width: 640,  height: 360  },
+  };
+
+  function openScreenSettings() {
+    document.getElementById("screenSettingsPanel").classList.add("open");
+    document.getElementById("screenSettingsOverlay").classList.add("open");
+  }
+
+  function closeScreenSettings() {
+    document.getElementById("screenSettingsPanel").classList.remove("open");
+    document.getElementById("screenSettingsOverlay").classList.remove("open");
+  }
+
+  function setScreenQuality(q) {
+    screenQuality = q;
+    document.querySelectorAll("[id^='sq-']").forEach(b => b.classList.remove("selected"));
+    document.getElementById(`sq-${q}`).classList.add("selected");
+    updateScreenSummary();
+  }
+
+  function setScreenFps(fps) {
+    screenFps = fps;
+    document.querySelectorAll("[id^='sf-']").forEach(b => b.classList.remove("selected"));
+    document.getElementById(`sf-${fps}`).classList.add("selected");
+    updateScreenSummary();
+  }
+
+  function updateScreenSummary() {
+    const labels = { "1080": "1080p", "720": "720p", "480": "480p", "360": "360p" };
+    document.getElementById("screenSettingsSummary").textContent =
+      `Current: ${labels[screenQuality]} @ ${screenFps} FPS`;
+  }
+
   let audioContext = null;
   let mixedAudioTrack = null;
   let mixedAudioStream = null;
@@ -687,10 +772,17 @@
   async function toggleScreen() {
     if (!sharing) {
       try {
+        const qRes = QUALITY_MAP[screenQuality];
         screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: "always", frameRate: { ideal: 30 } },
+          video: {
+            cursor: "always",
+            frameRate: { ideal: screenFps, max: screenFps },
+            width: { ideal: qRes.width },
+            height: { ideal: qRes.height }
+          },
           audio: true
         });
+        closeScreenSettings();
 
         const screenVideoTrack = screenStream.getVideoTracks()[0];
         const screenAudioTrack = screenStream.getAudioTracks()[0];
