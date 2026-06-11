@@ -680,47 +680,102 @@
     updateParticipantsList();
   }
 
+  let audioContext = null;
+  let mixedAudioTrack = null;
+  let mixedAudioStream = null;
+
   async function toggleScreen() {
     if (!sharing) {
       try {
         screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: "always" },
-          audio: true // request system audio
+          video: { cursor: "always", frameRate: { ideal: 30 } },
+          audio: true
         });
+
         const screenVideoTrack = screenStream.getVideoTracks()[0];
         const screenAudioTrack = screenStream.getAudioTracks()[0];
+        const micTrack = localStream.getAudioTracks()[0];
 
+        // Mix mic + screen audio together using Web Audio API
+        // This way mic stays active and screen audio is added on top
+        let audioTrackToSend = micTrack;
+        if (screenAudioTrack) {
+          try {
+            audioContext = new AudioContext();
+            const dest = audioContext.createMediaStreamDestination();
+
+            // Add mic
+            if (micTrack) {
+              const micStream = new MediaStream([micTrack]);
+              const micSource = audioContext.createMediaStreamSource(micStream);
+              micSource.connect(dest);
+            }
+
+            // Add screen audio
+            const screenAudioStream = new MediaStream([screenAudioTrack]);
+            const screenSource = audioContext.createMediaStreamSource(screenAudioStream);
+            screenSource.connect(dest);
+
+            mixedAudioStream = dest.stream;
+            mixedAudioTrack = mixedAudioStream.getAudioTracks()[0];
+            audioTrackToSend = mixedAudioTrack;
+          } catch(e) {
+            console.warn("Audio mixing failed, using mic only:", e);
+            audioTrackToSend = micTrack;
+          }
+        }
+
+        // Replace ONLY video track for all peers, keep audio as mixed
         Object.values(peers).forEach(peer => {
           const senders = peer._pc.getSenders();
-          // Replace video track
           const videoSender = senders.find(s => s.track && s.track.kind === "video");
           if (videoSender) videoSender.replaceTrack(screenVideoTrack);
-          // Add/replace audio track with screen audio if available
-          if (screenAudioTrack) {
+          if (audioTrackToSend) {
             const audioSender = senders.find(s => s.track && s.track.kind === "audio");
-            if (audioSender) audioSender.replaceTrack(screenAudioTrack);
+            if (audioSender) audioSender.replaceTrack(audioTrackToSend);
           }
         });
 
-        // Show screen in local tile
-        const combinedStream = new MediaStream([
-          screenVideoTrack,
-          ...(screenAudioTrack ? [screenAudioTrack] : localStream.getAudioTracks())
-        ]);
-        document.querySelector(`#tile-${MY_ID} video`).srcObject = combinedStream;
+        // Show screen in local tile (video only, keep cam audio)
+        const previewStream = new MediaStream([screenVideoTrack]);
+        document.querySelector(`#tile-${MY_ID} video`).srcObject = previewStream;
 
         sharing = true;
         document.getElementById("screenBtn").classList.add("active-share");
         document.querySelector("#screenBtn .ctrl-label").textContent = "Stop";
+
+        // When screen share ends (user clicks stop in browser bar)
         screenVideoTrack.onended = stopScreen;
-      } catch(e) { console.error(e); }
+
+        // Also watch if screen audio track ends separately
+        if (screenAudioTrack) {
+          screenAudioTrack.onended = () => {
+            // Screen audio ended but keep sharing video
+            console.log("Screen audio ended, continuing with mic only");
+          };
+        }
+
+      } catch(e) {
+        if (e.name !== "NotAllowedError") console.error("Screen share error:", e);
+      }
     } else { stopScreen(); }
   }
 
   function stopScreen() {
     if (!screenStream) return;
+
+    // Stop screen tracks
     screenStream.getTracks().forEach(t => t.stop());
 
+    // Clean up audio context
+    if (audioContext) {
+      audioContext.close().catch(() => {});
+      audioContext = null;
+    }
+    mixedAudioTrack = null;
+    mixedAudioStream = null;
+
+    // Restore original cam + mic tracks
     const camTrack = localStream.getVideoTracks()[0];
     const micTrack = localStream.getAudioTracks()[0];
 
@@ -732,7 +787,9 @@
       if (audioSender && micTrack) audioSender.replaceTrack(micTrack);
     });
 
+    // Restore local video preview
     document.querySelector(`#tile-${MY_ID} video`).srcObject = localStream;
+
     sharing = false;
     document.getElementById("screenBtn").classList.remove("active-share");
     document.querySelector("#screenBtn .ctrl-label").textContent = "Share";
