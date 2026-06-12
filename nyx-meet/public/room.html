@@ -197,6 +197,37 @@
   </div>
 </div>
 
+<!-- Right-click Context Menu -->
+<div class="ctx-menu" id="ctxMenu" style="display:none">
+  <div class="ctx-title" id="ctxTitle">Guest</div>
+  <div class="ctx-divider"></div>
+  <div class="ctx-item" id="ctxVolume">
+    <span>🔊</span>
+    <div class="ctx-volume-row">
+      <span>Volume</span>
+      <input type="range" id="ctxVolumeSlider" min="0" max="200" value="100" oninput="setTileVolume(this.value)" />
+      <span id="ctxVolumeVal">100%</span>
+    </div>
+  </div>
+  <div class="ctx-item" id="ctxMuteLocal" onclick="ctxMuteLocal()">
+    <span id="ctxMuteIcon">🔇</span>
+    <span id="ctxMuteLabel">Mute Locally</span>
+  </div>
+  <div class="ctx-item ctx-host-only" id="ctxForceMute" onclick="ctxForceMute()" style="display:none">
+    <span>🎙️✕</span>
+    <span>Force Mute (Host)</span>
+  </div>
+  <div class="ctx-item ctx-host-only ctx-danger" id="ctxKick" onclick="ctxKick()" style="display:none">
+    <span>🚫</span>
+    <span>Remove from Room</span>
+  </div>
+  <div class="ctx-item" id="ctxPin" onclick="ctxPin()">
+    <span>📌</span>
+    <span id="ctxPinLabel">Pin to Focus</span>
+  </div>
+</div>
+<div class="ctx-overlay" id="ctxOverlay" onclick="closeCtxMenu()"></div>
+
 <!-- Screen Share Settings Panel -->
 <div class="device-panel" id="screenSettingsPanel">
   <div class="device-panel-header">
@@ -269,7 +300,10 @@
   let hostId = null;
   let localStream = null;
   let dmConversations = {};
-  let peerScreenSharing = {}; // userId -> [{ from, msg, time }]
+  let peerScreenSharing = {};
+  let ctxTargetId = null;
+  let ctxTargetVideo = null;
+  let pinnedTileId = null; // userId -> [{ from, msg, time }]
   let activeDmUserId = null;
   let previewStream = null;
   let screenStream = null;
@@ -1071,6 +1105,93 @@
     document.getElementById("mirrorBtn").classList.toggle("active-share", mirrored);
   }
 
+  // ── CONTEXT MENU ─────────────────────────────
+  function openCtxMenu(e, tileId, video, isLocal) {
+    ctxTargetId = tileId;
+    ctxTargetVideo = video;
+
+    const menu = document.getElementById("ctxMenu");
+    const name = isLocal ? MY_NAME : (peerNames[tileId] || "Guest");
+    document.getElementById("ctxTitle").textContent = `${isLocal ? "👤 You" : "👤 " + name}`;
+
+    // Volume slider - set to current volume
+    const vol = Math.round((video.volume || 1) * 100);
+    document.getElementById("ctxVolumeSlider").value = vol;
+    document.getElementById("ctxVolumeVal").textContent = `${vol}%`;
+
+    // Hide volume and mute for self
+    document.getElementById("ctxVolume").style.display = isLocal ? "none" : "flex";
+    document.getElementById("ctxMuteLocal").style.display = isLocal ? "none" : "flex";
+
+    // Mute label
+    const isMuted = peerMuted[tileId] || video.muted;
+    document.getElementById("ctxMuteIcon").textContent = isMuted ? "🔊" : "🔇";
+    document.getElementById("ctxMuteLabel").textContent = isMuted ? "Unmute Locally" : "Mute Locally";
+
+    // Host-only options
+    const showHostOptions = isHost && !isLocal;
+    document.getElementById("ctxForceMute").style.display = showHostOptions ? "flex" : "none";
+    document.getElementById("ctxKick").style.display = showHostOptions ? "flex" : "none";
+
+    // Pin label
+    document.getElementById("ctxPinLabel").textContent = pinnedTileId === tileId ? "Unpin" : "Pin to Focus";
+
+    // Position menu
+    const x = Math.min(e.clientX, window.innerWidth - 220);
+    const y = Math.min(e.clientY, window.innerHeight - 280);
+    menu.style.left = x + "px";
+    menu.style.top = y + "px";
+    menu.style.display = "block";
+    document.getElementById("ctxOverlay").style.display = "block";
+  }
+
+  function closeCtxMenu() {
+    document.getElementById("ctxMenu").style.display = "none";
+    document.getElementById("ctxOverlay").style.display = "none";
+    ctxTargetId = null;
+    ctxTargetVideo = null;
+  }
+
+  function setTileVolume(val) {
+    document.getElementById("ctxVolumeVal").textContent = `${val}%`;
+    if (ctxTargetVideo) ctxTargetVideo.volume = val / 100;
+  }
+
+  function ctxMuteLocal() {
+    if (!ctxTargetId || !ctxTargetVideo) return;
+    peerMuted[ctxTargetId] = !peerMuted[ctxTargetId];
+    ctxTargetVideo.muted = peerMuted[ctxTargetId];
+    const isMuted = peerMuted[ctxTargetId];
+    document.getElementById("ctxMuteIcon").textContent = isMuted ? "🔊" : "🔇";
+    document.getElementById("ctxMuteLabel").textContent = isMuted ? "Unmute Locally" : "Mute Locally";
+    updateParticipantsList();
+    closeCtxMenu();
+  }
+
+  function ctxForceMute() {
+    if (!ctxTargetId) return;
+    hostMute(ctxTargetId);
+    closeCtxMenu();
+  }
+
+  function ctxKick() {
+    if (!ctxTargetId) return;
+    const name = peerNames[ctxTargetId] || "this participant";
+    kickParticipant(ctxTargetId, name);
+    closeCtxMenu();
+  }
+
+  function ctxPin() {
+    if (!ctxTargetId) return;
+    if (pinnedTileId === ctxTargetId) {
+      pinnedTileId = null;
+    } else {
+      pinnedTileId = ctxTargetId;
+    }
+    applyLayout();
+    closeCtxMenu();
+  }
+
   // ── LAYOUTS ──────────────────────────────────
   let currentLayout = "gallery";
   let speakerFocusId = null;
@@ -1106,20 +1227,21 @@
     pip.style.display = "none";
     if (localTile) localTile.style.display = "";
 
+    // Pinned tile takes focus priority
+    const pinnedEl = pinnedTileId ? document.getElementById(`tile-${pinnedTileId}`) : null;
+
     if (currentLayout === "gallery") {
       grid.classList.add("layout-gallery");
+      if (pinnedEl) pinnedEl.classList.add("focused");
 
     } else if (currentLayout === "speaker") {
       grid.classList.add("layout-speaker");
-      // Biggest = first non-self, or self if alone
-      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
-      tiles.forEach(t => {
-        if (t === focused) t.classList.add("focused");
-      });
+      const focused = pinnedEl || tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      tiles.forEach(t => { if (t === focused) t.classList.add("focused"); });
 
     } else if (currentLayout === "fullscreen") {
       grid.classList.add("layout-fullscreen");
-      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      const focused = pinnedEl || tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
       tiles.forEach(t => {
         if (t !== focused) t.style.display = "none";
         else t.classList.add("focused");
@@ -1127,32 +1249,23 @@
 
     } else if (currentLayout === "multispeaker") {
       grid.classList.add("layout-multispeaker");
-      const focused = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      const focused = pinnedEl || tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
       focused.classList.add("focused");
 
     } else if (currentLayout === "immersive") {
       grid.classList.add("layout-immersive");
-      const main = tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
+      const main = pinnedEl || tiles.find(t => t.id !== `tile-${MY_ID}`) || tiles[0];
       const overlay = tiles.find(t => t !== main);
       main.classList.add("immersive-main");
       if (overlay) overlay.classList.add("immersive-overlay");
-      tiles.forEach(t => {
-        if (t !== main && t !== overlay) t.style.display = "none";
-      });
+      tiles.forEach(t => { if (t !== main && t !== overlay) t.style.display = "none"; });
 
     } else if (currentLayout === "floating") {
       grid.classList.add("layout-floating");
-      // Hide local tile, show as floating PiP
       if (localTile) localTile.style.display = "none";
       const localVideo = localTile ? localTile.querySelector("video") : null;
-      if (localVideo) {
-        pipVideo.srcObject = localVideo.srcObject;
-        pip.style.display = "flex";
-      }
-      // Make remote tiles fill
-      tiles.forEach(t => {
-        if (t.id !== `tile-${MY_ID}`) t.classList.add("focused");
-      });
+      if (localVideo) { pipVideo.srcObject = localVideo.srcObject; pip.style.display = "flex"; }
+      tiles.forEach(t => { if (t.id !== `tile-${MY_ID}`) t.classList.add("focused"); });
     }
   }
 
