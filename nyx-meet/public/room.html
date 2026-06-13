@@ -447,6 +447,12 @@
       <div class="p-info">
         <span class="p-name">${MY_NAME} (You) ${isHost ? '<span class="host-badge">👑 Host</span>' : ''}</span>
         <span class="p-status">${micOn ? "🎙️" : "🔇"} ${camOn ? "📷" : "🚫"}</span>
+      </div>
+      <div class="p-menu-wrapper">
+        <button class="p-menu-btn" onclick="toggleParticipantMenu('self')">⋮</button>
+        <div class="p-dropdown" id="pmenu-self">
+          <div class="p-dropdown-item" onclick="renameSelf()">✏️ Rename</div>
+        </div>
       </div>`;
     list.appendChild(selfDiv);
 
@@ -455,20 +461,27 @@
       const isThisHost = id === hostId;
       const div = document.createElement("div");
       div.className = "participant-item";
+
+      let dropdownItems = "";
+      if (isHost) {
+        dropdownItems += `<div class="p-dropdown-item" onclick="hostMute('${id}')">${peerMuted[id] ? "🔊 Unmute" : "🎙️✕ Mute"}</div>`;
+        dropdownItems += `<div class="p-dropdown-item ctx-danger" onclick="kickParticipant('${id}', '${name}')">🚫 Kick</div>`;
+      }
+      if (!dropdownItems) {
+        dropdownItems = `<div class="p-dropdown-item p-dropdown-empty">Host-only actions</div>`;
+      }
+
       div.innerHTML = `
         <div class="p-avatar">${name[0].toUpperCase()}</div>
         <div class="p-info">
           <span class="p-name">${name} ${isThisHost ? '<span class="host-badge">👑 Host</span>' : ''}</span>
           <span class="p-status">${peerMuted[id] ? "🔇" : "🎙️"}</span>
         </div>
-        <div class="p-actions">
-          <button class="p-mute-btn" onclick="muteParticipant('${id}')" title="${peerMuted[id] ? 'Unmute locally' : 'Mute locally'}">
-            ${peerMuted[id] ? "🔊" : "🔇"}
-          </button>
-          ${isHost ? `
-          <button class="p-host-mute-btn" onclick="hostMute('${id}')" title="Force mute">🎙️✕</button>
-          <button class="p-kick-btn" onclick="kickParticipant('${id}', '${name}')" title="Kick">🚫</button>
-          ` : ''}
+        <div class="p-menu-wrapper">
+          <button class="p-menu-btn" onclick="toggleParticipantMenu('${id}')">⋮</button>
+          <div class="p-dropdown" id="pmenu-${id}">
+            ${dropdownItems}
+          </div>
         </div>`;
       list.appendChild(div);
     });
@@ -479,6 +492,38 @@
     const dmBtn = document.getElementById("dmHeaderBtn");
     if (Object.keys(peerNames).length > 0) dmBtn.style.display = "";
     else dmBtn.style.display = "none";
+  }
+
+  function toggleParticipantMenu(id) {
+    const menu = document.getElementById(`pmenu-${id}`);
+    const isOpen = menu.classList.contains("open");
+    document.querySelectorAll(".p-dropdown").forEach(m => m.classList.remove("open"));
+    if (!isOpen) menu.classList.add("open");
+  }
+
+  // Close dropdowns when clicking elsewhere
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".p-menu-wrapper")) {
+      document.querySelectorAll(".p-dropdown").forEach(m => m.classList.remove("open"));
+    }
+  });
+
+  function renameSelf() {
+    const newName = prompt("Enter your new name:", MY_NAME);
+    if (!newName || !newName.trim()) return;
+    MY_NAME = newName.trim();
+
+    // Update local tile label
+    const localTile = document.getElementById(`tile-${MY_ID}`);
+    if (localTile) localTile.querySelector(".video-label").textContent = `${MY_NAME} (You)`;
+    const camTile = document.getElementById(`cam-${MY_ID}`);
+    if (camTile) camTile.querySelector(".cam-label").textContent = `${MY_NAME} (You)`;
+
+    // Notify others
+    socket.emit("rename", { roomId: ROOM_ID, userId: MY_ID, name: MY_NAME });
+
+    updateParticipantsList();
+    showNotif(`You are now known as ${MY_NAME}`, "join");
   }
 
   function hostMute(targetId) {
@@ -718,6 +763,21 @@
     delete peerMuted[kickedId];
     showNotif(`${name} was removed from the room`, "leave");
     updateParticipantsList();
+  });
+
+  // Someone renamed themselves
+  socket.on("user-renamed", ({ userId, name }) => {
+    const oldName = peerNames[userId] || "Guest";
+    peerNames[userId] = name;
+
+    // Update tile labels
+    const tile = document.getElementById(`tile-${userId}`);
+    if (tile) tile.querySelector(".video-label").textContent = name;
+    const camTile = document.getElementById(`cam-${userId}`);
+    if (camTile) camTile.querySelector(".cam-label").textContent = name;
+
+    updateParticipantsList();
+    showNotif(`${oldName} is now ${name}`, "join");
   });
 
   // You were kicked

@@ -63,6 +63,16 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("screen-share-stopped", { userId });
   });
 
+  // Rename relay
+  socket.on("rename", ({ roomId, userId, name }) => {
+    socket.userName = name;
+    // Update in rooms tracker
+    if (rooms[roomId] && rooms[roomId][socket.id]) {
+      rooms[roomId][socket.id].name = name;
+    }
+    socket.to(roomId).emit("user-renamed", { userId, name });
+  });
+
   // DM relay
   socket.on("dm", ({ toUserId, fromName, msg }) => {
     const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === toUserId);
