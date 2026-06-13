@@ -664,11 +664,19 @@
     label.className = "video-label";
     label.textContent = isLocal ? `${name} (You)` : name;
 
+    // Fullscreen button
+    const fsBtn = document.createElement("button");
+    fsBtn.className = "tile-fullscreen-btn";
+    fsBtn.innerHTML = "⛶";
+    fsBtn.title = "Fullscreen";
+    fsBtn.onclick = (e) => { e.stopPropagation(); toggleTileFullscreen(tile); };
+
     // Camera panel thumbnail
     addCamPanelTile(id, stream, name, isLocal);
 
     tile.appendChild(video);
     tile.appendChild(label);
+    tile.appendChild(fsBtn);
     document.getElementById("videoGrid").appendChild(tile);
   }
 
@@ -1081,8 +1089,15 @@
     lbl.className = "video-label screen-label";
     lbl.innerHTML = `🖥️ ${label}`;
 
+    const fsBtn = document.createElement("button");
+    fsBtn.className = "tile-fullscreen-btn";
+    fsBtn.innerHTML = "⛶";
+    fsBtn.title = "Fullscreen";
+    fsBtn.onclick = (e) => { e.stopPropagation(); toggleTileFullscreen(tile); };
+
     tile.appendChild(video);
     tile.appendChild(lbl);
+    tile.appendChild(fsBtn);
     document.getElementById("videoGrid").prepend(tile); // put screen at front
     setTimeout(applyLayout, 100);
     if (captureMode) setTimeout(() => enableCaptureForTile(tile), 200);
@@ -1546,6 +1561,23 @@
       // Worker keeps drawing — nothing else needed
       console.log("Tab hidden, capture worker continues");
     }
+  });
+
+  // ── TILE FULLSCREEN ────────────────────────────
+  function toggleTileFullscreen(tile) {
+    if (!document.fullscreenElement) {
+      tile.requestFullscreen().then(() => {
+        tile.classList.add("is-fullscreen");
+      }).catch(err => console.error("Fullscreen error:", err));
+    } else {
+      document.exitFullscreen();
+    }
+  }
+
+  document.addEventListener("fullscreenchange", () => {
+    document.querySelectorAll(".video-tile").forEach(t => {
+      t.classList.toggle("is-fullscreen", t === document.fullscreenElement);
+    });
   });
 
   // ── LAYOUTS ──────────────────────────────────
