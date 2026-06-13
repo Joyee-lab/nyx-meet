@@ -1101,3 +1101,20 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
 .video-tile.focused .video-label {
   background: rgba(124,58,237,0.7);
 }
+
+/* ── Speaking indicator ────────────────────── */
+.video-tile.speaking {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 2px rgba(52,211,153,0.4), 0 0 20px rgba(52,211,153,0.3);
+  transition: box-shadow 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+.cam-tile.speaking {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 2px rgba(52,211,153,0.4), 0 0 12px rgba(52,211,153,0.3);
+  transition: box-shadow 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+.video-tile, .cam-tile {
+  transition: border-color 0.2s ease-out, box-shadow 0.2s ease-out;
+}

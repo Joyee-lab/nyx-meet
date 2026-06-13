@@ -611,6 +611,7 @@
       } else {
         addVideoStream(userId, stream, peerNames[userId]);
       }
+      setupSpeakingDetection(userId, stream);
       updateParticipantsList();
       setTimeout(applyLayout, 200);
     });
@@ -630,6 +631,7 @@
 
     peer.on("close", () => {
       removeVideoStream(userId);
+      stopSpeakingDetection(userId);
       delete peers[userId];
       delete peerNames[userId];
       delete peerMuted[userId];
@@ -1102,6 +1104,61 @@
     });
   }
 
+  // ── SPEAKING DETECTION ────────────────────────
+  const audioAnalysers = {};
+
+  function setupSpeakingDetection(id, stream) {
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) return;
+
+    try {
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      audioAnalysers[id] = { ctx, analyser, dataArray };
+
+      detectSpeaking(id);
+    } catch(e) {
+      console.warn("Speaking detection setup failed:", e);
+    }
+  }
+
+  function detectSpeaking(id) {
+    const data = audioAnalysers[id];
+    if (!data) return;
+
+    function check() {
+      if (!audioAnalysers[id]) return; // stopped
+
+      data.analyser.getByteFrequencyData(data.dataArray);
+      let sum = 0;
+      for (let i = 0; i < data.dataArray.length; i++) sum += data.dataArray[i];
+      const avg = sum / data.dataArray.length;
+
+      const tile = document.getElementById(`tile-${id}`);
+      const camTile = document.getElementById(`cam-${id}`);
+      const isSpeaking = avg > 12; // threshold
+
+      if (tile) tile.classList.toggle("speaking", isSpeaking);
+      if (camTile) camTile.classList.toggle("speaking", isSpeaking);
+
+      requestAnimationFrame(check);
+    }
+    check();
+  }
+
+  function stopSpeakingDetection(id) {
+    if (audioAnalysers[id]) {
+      audioAnalysers[id].ctx.close().catch(() => {});
+      delete audioAnalysers[id];
+    }
+  }
+
   // ── MIRROR ───────────────────────────────────
   let mirrored = true;
   function toggleMirror() {
@@ -1451,6 +1508,7 @@
     document.querySelector("#camBtn .ctrl-label").textContent = camOn ? "Camera" : "Cam Off";
 
     addVideoStream(MY_ID, localStream, MY_NAME, true);
+    setupSpeakingDetection(MY_ID, localStream);
     // Mirror local video by default
     setTimeout(() => {
       const lv = document.querySelector(`#tile-${MY_ID} video`);
