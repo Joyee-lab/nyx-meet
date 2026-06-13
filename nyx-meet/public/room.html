@@ -111,6 +111,10 @@
       <span>⊞</span>
       <span class="ctrl-label">Layout</span>
     </button>
+    <button class="ctrl-btn" onclick="toggleCaptureMode()" id="captureBtn" title="Fixes black video in OBS/vMix screen capture">
+      <span>📹</span>
+      <span class="ctrl-label">Capture</span>
+    </button>
     <button class="ctrl-btn danger" onclick="leaveRoom()">
       <span>📵</span>
       <span class="ctrl-label">Leave</span>
@@ -1005,6 +1009,7 @@
     tile.appendChild(lbl);
     document.getElementById("videoGrid").prepend(tile); // put screen at front
     setTimeout(applyLayout, 100);
+    if (captureMode) setTimeout(() => enableCaptureForTile(tile), 200);
   }
 
   function removeScreenTile(id) {
@@ -1347,6 +1352,74 @@
     closeCtxMenu();
   }
 
+  // ── CAPTURE MODE (for OBS/vMix desktop capture) ──
+  // Some screen capture tools can't see hardware-accelerated <video>
+  // elements. This mode mirrors every video onto a <canvas>, which
+  // is always part of the normal rendering pipeline and capturable.
+  let captureMode = false;
+  const captureCanvases = {}; // tileId -> { canvas, ctx, rafId }
+
+  function toggleCaptureMode() {
+    captureMode = !captureMode;
+    document.getElementById("captureBtn").classList.toggle("active-share", captureMode);
+
+    const allTiles = document.querySelectorAll(".video-tile, .cam-tile");
+    allTiles.forEach(tile => {
+      if (captureMode) enableCaptureForTile(tile);
+      else disableCaptureForTile(tile);
+    });
+
+    showNotif(captureMode
+      ? "📹 Capture mode ON — OBS/vMix can now see the video"
+      : "📹 Capture mode OFF", "join");
+  }
+
+  function enableCaptureForTile(tile) {
+    const video = tile.querySelector("video");
+    if (!video || captureCanvases[tile.id]) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "capture-canvas";
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+
+    // Match mirroring if applied to the video
+    const videoTransform = window.getComputedStyle(video).transform;
+    if (videoTransform && videoTransform !== "none") {
+      canvas.style.transform = videoTransform;
+    }
+
+    tile.appendChild(canvas);
+    video.style.visibility = "hidden";
+
+    const ctx = canvas.getContext("2d");
+
+    function draw() {
+      if (!captureCanvases[tile.id]) return; // stopped
+      if (video.videoWidth && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+      if (video.readyState >= 2) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+      captureCanvases[tile.id].rafId = requestAnimationFrame(draw);
+    }
+
+    captureCanvases[tile.id] = { canvas, ctx, rafId: null };
+    draw();
+  }
+
+  function disableCaptureForTile(tile) {
+    const entry = captureCanvases[tile.id];
+    if (!entry) return;
+    cancelAnimationFrame(entry.rafId);
+    entry.canvas.remove();
+    delete captureCanvases[tile.id];
+    const video = tile.querySelector("video");
+    if (video) video.style.visibility = "visible";
+  }
+
   // ── LAYOUTS ──────────────────────────────────
   let currentLayout = "gallery";
   let speakerFocusId = null;
@@ -1575,6 +1648,8 @@
     tile.appendChild(video);
     tile.appendChild(label);
     document.getElementById("camPanelGrid").appendChild(tile);
+
+    if (captureMode) setTimeout(() => enableCaptureForTile(tile), 200);
   }
 
   // ── START ROOM ───────────────────────────────

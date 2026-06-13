@@ -1322,3 +1322,18 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
 .participant-item {
   position: relative;
 }
+
+/* ── Capture mode (canvas overlay for OBS/vMix) ── */
+.capture-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-tile, .cam-tile {
+  position: relative; /* ensure canvas overlays correctly */
+}
