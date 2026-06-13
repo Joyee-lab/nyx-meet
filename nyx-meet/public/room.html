@@ -100,10 +100,6 @@
       </button>
       <button class="ctrl-btn ctrl-arrow" onclick="openDevicePanel('video')">▲</button>
     </div>
-    <button class="ctrl-btn" id="mirrorBtn" onclick="toggleMirror()" title="Mirror my video">
-      <span>🔁</span>
-      <span class="ctrl-label">Mirror</span>
-    </button>
     <div class="ctrl-group">
       <button class="ctrl-btn" id="screenBtn" onclick="toggleScreen()">
         <span>🖥️</span>
@@ -1030,6 +1026,21 @@
         btn.onclick = () => selectDevice("video", device.deviceId);
         list.appendChild(btn);
       });
+
+      // Mirror toggle
+      const mirrorLabel = document.createElement("div");
+      mirrorLabel.className = "device-section-label";
+      mirrorLabel.style.marginTop = "0.75rem";
+      mirrorLabel.textContent = "🔁 Display Options";
+      list.appendChild(mirrorLabel);
+
+      const mirrorBtn = document.createElement("button");
+      mirrorBtn.className = "device-item";
+      mirrorBtn.id = "ctxMirrorBtn";
+      if (mirrored) mirrorBtn.classList.add("selected");
+      mirrorBtn.textContent = "Mirror My Video";
+      mirrorBtn.onclick = () => toggleMirror();
+      list.appendChild(mirrorBtn);
     }
 
     document.getElementById("devicePanel").classList.add("open");
@@ -1102,7 +1113,8 @@
     if (localVideo) localVideo.style.transform = style;
     if (camPanelVideo) camPanelVideo.style.transform = style;
     if (previewVideo) previewVideo.style.transform = style;
-    document.getElementById("mirrorBtn").classList.toggle("active-share", mirrored);
+    const btn = document.getElementById("ctxMirrorBtn");
+    if (btn) btn.classList.toggle("selected", mirrored);
   }
 
   // ── CONTEXT MENU ─────────────────────────────
