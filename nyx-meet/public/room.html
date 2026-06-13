@@ -288,6 +288,17 @@
   let MY_NAME = "Guest";
   let MY_ID = Math.random().toString(36).substring(2, 10);
 
+  // ── AUTO-JOIN / OBS MODE PARAMS ────────────────
+  // For embedding in OBS/vMix browser sources where typing isn't possible:
+  // ?room=JOYEE&name=NyxBot&autojoin=1&obs=1&mic=0&cam=1
+  const AUTO_JOIN = params.get("autojoin") === "1";
+  const AUTO_NAME = params.get("name");
+  const OBS_MODE = params.get("obs") === "1";
+  const AUTO_MIC = params.get("mic") !== "0";   // default ON
+  const AUTO_CAM = params.get("cam") !== "0";   // default ON
+
+  if (OBS_MODE) document.body.classList.add("obs-mode");
+
   document.getElementById("roomLabel").textContent = `Room: ${ROOM_ID}`;
   document.title = `Nyx Meet — ${ROOM_ID}`;
 
@@ -342,6 +353,24 @@
       document.getElementById("previewOff").style.display = "none";
     } catch(e) {
       document.getElementById("previewOff").style.display = "flex";
+    }
+
+    // ── AUTO-JOIN ────────────────────────────────
+    // Skip prejoin screen entirely if autojoin param is set (for OBS/vMix)
+    if (AUTO_JOIN) {
+      MY_NAME = AUTO_NAME || "Guest";
+      preMicOn = AUTO_MIC;
+      preCamOn = AUTO_CAM;
+      if (previewStream) {
+        previewStream.getAudioTracks().forEach(t => t.enabled = preMicOn);
+        previewStream.getVideoTracks().forEach(t => t.enabled = preCamOn);
+      }
+      micOn = preMicOn;
+      camOn = preCamOn;
+      localStream = previewStream;
+      document.getElementById("prejoinScreen").style.display = "none";
+      document.getElementById("roomWrapper").style.display = "flex";
+      startRoom();
     }
   }
 

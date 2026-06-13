@@ -1337,3 +1337,40 @@ html, body { height: 100%; font-family: 'DM Sans', sans-serif; background: var(-
 .video-tile, .cam-tile {
   position: relative; /* ensure canvas overlays correctly */
 }
+
+/* ── OBS / vMix clean mode ──────────────────── */
+/* Use ?obs=1 in the URL to hide all UI controls and show
+   only the video grid - perfect for browser source embeds */
+body.obs-mode .room-header,
+body.obs-mode .controls-bar,
+body.obs-mode .side-panel,
+body.obs-mode .cam-panel,
+body.obs-mode .notif-stack,
+body.obs-mode .layout-panel,
+body.obs-mode .layout-overlay,
+body.obs-mode .device-panel,
+body.obs-mode .device-overlay,
+body.obs-mode .ctx-menu,
+body.obs-mode .ctx-overlay,
+body.obs-mode .floating-pip {
+  display: none !important;
+}
+
+body.obs-mode .room-body {
+  height: 100vh;
+}
+
+body.obs-mode .video-grid {
+  padding: 0;
+  gap: 0.5rem;
+}
+
+body.obs-mode .video-tile {
+  border-radius: 0;
+  border: none;
+}
+
+body.obs-mode .video-tile .video-label {
+  font-size: 1rem;
+  padding: 0.4rem 0.9rem;
+}
