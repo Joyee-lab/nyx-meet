@@ -1434,7 +1434,18 @@
     }
 
     tile.appendChild(canvas);
-    video.style.visibility = "hidden";
+
+    // IMPORTANT: don't use visibility:hidden or display:none here.
+    // Chrome pauses video decoding for hidden/invisible elements when
+    // the tab is backgrounded, which is exactly the freeze we're fixing.
+    // Instead keep it "visible" (opacity just above 0) so decoding
+    // continues, and let the canvas cover it visually on top.
+    video.dataset.origOpacity = video.style.opacity || "";
+    video.style.opacity = "0.01";
+    video.style.position = "absolute";
+    video.style.inset = "0";
+    video.style.zIndex = "0";
+    canvas.style.zIndex = "1";
 
     captureCanvases[tile.id] = { canvas, ctx: canvas.getContext("2d") };
   }
@@ -1445,7 +1456,12 @@
     entry.canvas.remove();
     delete captureCanvases[tile.id];
     const video = tile.querySelector("video");
-    if (video) video.style.visibility = "visible";
+    if (video) {
+      video.style.opacity = video.dataset.origOpacity || "";
+      video.style.position = "";
+      video.style.inset = "";
+      video.style.zIndex = "";
+    }
   }
 
   // Keep peer connections / media flowing even when tab is hidden
