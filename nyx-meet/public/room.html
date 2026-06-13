@@ -329,6 +329,47 @@
   let selectedVideoId = null;
 
   // ── PREJOIN ─────────────────────────────────
+  // ── DUMMY STREAM (fallback for vMix/OBS embedded browsers) ──
+  // Some embedded browsers (vMix Web Browser, OBS Browser Source) can't
+  // grant camera/mic permissions. Without ANY local tracks, the WebRTC
+  // connection won't negotiate media properly and you won't receive
+  // anyone else's video either. So we create a silent placeholder
+  // video+audio stream just to keep the connection "sendrecv".
+  function createDummyStream() {
+    // Silent black video track via canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = 640; canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0a0a0f";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#a78bfa";
+    ctx.font = "28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("📡 Viewer (no camera)", canvas.width/2, canvas.height/2);
+    const videoStream = canvas.captureStream(5); // 5fps is enough
+    const videoTrack = videoStream.getVideoTracks()[0];
+
+    // Silent audio track via AudioContext
+    let audioTrack = null;
+    try {
+      const ac = new AudioContext();
+      const dest = ac.createMediaStreamDestination();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      gain.gain.value = 0; // silent
+      osc.connect(gain);
+      gain.connect(dest);
+      osc.start();
+      audioTrack = dest.stream.getAudioTracks()[0];
+    } catch(e) {
+      console.warn("Could not create dummy audio track:", e);
+    }
+
+    const tracks = [videoTrack];
+    if (audioTrack) tracks.push(audioTrack);
+    return new MediaStream(tracks);
+  }
+
   async function startPreview() {
     try {
       previewStream = await navigator.mediaDevices.getUserMedia({
@@ -352,7 +393,13 @@
       v.srcObject = previewStream;
       document.getElementById("previewOff").style.display = "none";
     } catch(e) {
+      console.warn("getUserMedia failed, using dummy stream:", e);
       document.getElementById("previewOff").style.display = "flex";
+      previewStream = createDummyStream();
+      const v = document.getElementById("previewVideo");
+      v.srcObject = previewStream;
+      preMicOn = false;
+      preCamOn = false;
     }
 
     // ── AUTO-JOIN ────────────────────────────────
@@ -396,7 +443,7 @@
     MY_NAME = nameVal || "Guest";
     micOn = preMicOn;
     camOn = preCamOn;
-    localStream = previewStream;
+    localStream = previewStream || createDummyStream();
     document.getElementById("prejoinScreen").style.display = "none";
     document.getElementById("roomWrapper").style.display = "flex";
     startRoom();
