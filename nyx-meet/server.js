@@ -89,6 +89,14 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("participant-muted", { userId: targetUserId });
   });
 
+  // Host allows a participant to unmute again
+  socket.on("host-unmute", ({ roomId, targetUserId }) => {
+    if (roomHosts[roomId] !== socket.userId) return; // only host
+    const targetSocket = [...io.sockets.sockets.values()].find(s => s.userId === targetUserId);
+    if (targetSocket) targetSocket.emit("force-unmute-allowed");
+    socket.to(roomId).emit("participant-unmuted", { userId: targetUserId });
+  });
+
   // Host kicks a participant
   socket.on("host-kick", ({ roomId, targetUserId }) => {
     if (roomHosts[roomId] !== socket.userId) return; // only host

@@ -299,7 +299,9 @@
   let peerScreenSharing = {};
   let ctxTargetId = null;
   let ctxTargetVideo = null;
-  let pinnedTileId = null; // userId -> [{ from, msg, time }]
+  let pinnedTileId = null;
+  let hostMutedPeers = {}; // userId -> true if host force-muted them
+  let forceMutedByHost = false; // userId -> [{ from, msg, time }]
   let activeDmUserId = null;
   let previewStream = null;
   let screenStream = null;
@@ -464,7 +466,11 @@
 
       let dropdownItems = "";
       if (isHost) {
-        dropdownItems += `<div class="p-dropdown-item" onclick="hostMute('${id}')">${peerMuted[id] ? "🔊 Unmute" : "🎙️✕ Mute"}</div>`;
+        if (hostMutedPeers[id]) {
+          dropdownItems += `<div class="p-dropdown-item" onclick="hostUnmute('${id}')">🔊 Unmute</div>`;
+        } else {
+          dropdownItems += `<div class="p-dropdown-item" onclick="hostMute('${id}')">🎙️✕ Mute</div>`;
+        }
         dropdownItems += `<div class="p-dropdown-item ctx-danger" onclick="kickParticipant('${id}', '${name}')">🚫 Kick</div>`;
       }
       if (!dropdownItems) {
@@ -528,7 +534,16 @@
 
   function hostMute(targetId) {
     socket.emit("host-mute", { roomId: ROOM_ID, targetUserId: targetId });
+    hostMutedPeers[targetId] = true;
+    updateParticipantsList();
     showNotif("Participant muted", "info");
+  }
+
+  function hostUnmute(targetId) {
+    socket.emit("host-unmute", { roomId: ROOM_ID, targetUserId: targetId });
+    hostMutedPeers[targetId] = false;
+    updateParticipantsList();
+    showNotif("Participant can unmute now", "info");
   }
 
   function kickParticipant(targetId, name) {
@@ -747,7 +762,14 @@
   // Force muted by host
   socket.on("force-mute", () => {
     if (micOn) toggleMic();
+    forceMutedByHost = true;
     showNotif("🔇 You were muted by the host", "leave");
+  });
+
+  // Host allows you to unmute again
+  socket.on("force-unmute-allowed", () => {
+    forceMutedByHost = false;
+    showNotif("🔊 The host allowed you to unmute", "join");
   });
 
   // Participant was muted (update UI for everyone)
@@ -820,6 +842,10 @@
 
   // ── CONTROLS ─────────────────────────────────
   function toggleMic() {
+    if (forceMutedByHost && !micOn) {
+      showNotif("🔇 You were muted by the host and can't unmute", "leave");
+      return;
+    }
     micOn = !micOn;
     localStream.getAudioTracks().forEach(t => t.enabled = micOn);
     document.getElementById("micIcon").textContent = micOn ? "🎙️" : "🔇";
