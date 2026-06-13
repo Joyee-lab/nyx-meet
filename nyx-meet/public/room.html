@@ -1354,10 +1354,52 @@
 
   // ── CAPTURE MODE (for OBS/vMix desktop capture) ──
   // Some screen capture tools can't see hardware-accelerated <video>
-  // elements. This mode mirrors every video onto a <canvas>, which
-  // is always part of the normal rendering pipeline and capturable.
+  // elements. This mode mirrors every video onto a <canvas>.
+  // We use a Web Worker as the timer because requestAnimationFrame
+  // (and even setInterval on the main thread) gets throttled/paused
+  // when the tab is in the background (alt-tabbed). Workers are NOT
+  // throttled, so the canvas keeps updating even when minimized.
   let captureMode = false;
-  const captureCanvases = {}; // tileId -> { canvas, ctx, rafId }
+  const captureCanvases = {}; // tileId -> { canvas, ctx }
+  let captureWorker = null;
+
+  function getCaptureWorker() {
+    if (captureWorker) return captureWorker;
+    const workerCode = `
+      let timer = null;
+      onmessage = function(e) {
+        if (e.data === 'start') {
+          if (timer) clearInterval(timer);
+          timer = setInterval(() => postMessage('tick'), 33); // ~30fps
+        } else if (e.data === 'stop') {
+          if (timer) clearInterval(timer);
+          timer = null;
+        }
+      };
+    `;
+    const blob = new Blob([workerCode], { type: "application/javascript" });
+    captureWorker = new Worker(URL.createObjectURL(blob));
+    captureWorker.onmessage = (e) => {
+      if (e.data === "tick") drawAllCaptureCanvases();
+    };
+    return captureWorker;
+  }
+
+  function drawAllCaptureCanvases() {
+    Object.entries(captureCanvases).forEach(([tileId, entry]) => {
+      const tile = document.getElementById(tileId);
+      const video = tile ? tile.querySelector("video") : null;
+      if (!video || !entry.canvas) return;
+
+      if (video.videoWidth && (entry.canvas.width !== video.videoWidth || entry.canvas.height !== video.videoHeight)) {
+        entry.canvas.width = video.videoWidth;
+        entry.canvas.height = video.videoHeight;
+      }
+      if (video.readyState >= 2) {
+        try { entry.ctx.drawImage(video, 0, 0, entry.canvas.width, entry.canvas.height); } catch(e) {}
+      }
+    });
+  }
 
   function toggleCaptureMode() {
     captureMode = !captureMode;
@@ -1369,8 +1411,11 @@
       else disableCaptureForTile(tile);
     });
 
+    const worker = getCaptureWorker();
+    worker.postMessage(captureMode ? "start" : "stop");
+
     showNotif(captureMode
-      ? "📹 Capture mode ON — OBS/vMix can now see the video"
+      ? "📹 Capture mode ON — keeps playing even when alt-tabbed"
       : "📹 Capture mode OFF", "join");
   }
 
@@ -1383,7 +1428,6 @@
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
 
-    // Match mirroring if applied to the video
     const videoTransform = window.getComputedStyle(video).transform;
     if (videoTransform && videoTransform !== "none") {
       canvas.style.transform = videoTransform;
@@ -1392,33 +1436,25 @@
     tile.appendChild(canvas);
     video.style.visibility = "hidden";
 
-    const ctx = canvas.getContext("2d");
-
-    function draw() {
-      if (!captureCanvases[tile.id]) return; // stopped
-      if (video.videoWidth && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-      }
-      if (video.readyState >= 2) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      }
-      captureCanvases[tile.id].rafId = requestAnimationFrame(draw);
-    }
-
-    captureCanvases[tile.id] = { canvas, ctx, rafId: null };
-    draw();
+    captureCanvases[tile.id] = { canvas, ctx: canvas.getContext("2d") };
   }
 
   function disableCaptureForTile(tile) {
     const entry = captureCanvases[tile.id];
     if (!entry) return;
-    cancelAnimationFrame(entry.rafId);
     entry.canvas.remove();
     delete captureCanvases[tile.id];
     const video = tile.querySelector("video");
     if (video) video.style.visibility = "visible";
   }
+
+  // Keep peer connections / media flowing even when tab is hidden
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && captureMode) {
+      // Worker keeps drawing — nothing else needed
+      console.log("Tab hidden, capture worker continues");
+    }
+  });
 
   // ── LAYOUTS ──────────────────────────────────
   let currentLayout = "gallery";
